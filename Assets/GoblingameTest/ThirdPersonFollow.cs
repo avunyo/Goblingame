@@ -30,6 +30,10 @@ namespace Goblingame.TestScene
         [SerializeField] private float focusTurnSharpness = 6f;
         [SerializeField] private float focusPitch = 16f;
         [SerializeField] private float shoulderOffset = 0.55f;
+        [Tooltip("Mouse movement (degrees, accumulated over ~0.3 s) that breaks the focus.")]
+        [SerializeField] private float breakFocusFlick = 14f;
+        [Tooltip("Zooming out past this distance breaks the focus.")]
+        [SerializeField] private float breakFocusZoom = 7f;
 
         private float yaw, pitch, distance, targetDistance;
         private Vector3 pivot, pivotVelocity;
@@ -87,8 +91,8 @@ namespace Goblingame.TestScene
                 (mouse != null && mouse.middleButton.wasPressedThisFrame));
             if (toggle)
             {
-                if (locked != null) { locked = null; manualRelease = true; manualReleaseUntil = Time.time + 4f; }
-                else { manualRelease = false; locked = FindBest(14f, true); }
+                if (locked != null) Release();
+                else { manualRelease = false; locked = FindBest(14f, true); lockFlick = Vector2.zero; }
             }
         }
 
@@ -111,7 +115,7 @@ namespace Goblingame.TestScene
 
             if (locked != null)
             {
-                // Face the enemy from behind the goblin; a hard mouse flick switches target.
+                // Face the enemy from behind the goblin.
                 Vector3 to = locked.Health.HitPoint - target.position; to.y = 0f;
                 if (to.sqrMagnitude > 0.01f)
                 {
@@ -120,9 +124,11 @@ namespace Goblingame.TestScene
                     yaw = Mathf.LerpAngle(yaw, wantYaw, k);
                     pitch = Mathf.Lerp(pitch, focusPitch, k * 0.5f);
                 }
-                lockFlick = Vector2.Lerp(lockFlick, Vector2.zero, 1f - Mathf.Exp(-4f * dt)) + look;
-                if (Mathf.Abs(lockFlick.x) > 18f) { SwitchTarget(Mathf.Sign(lockFlick.x)); lockFlick = Vector2.zero; }
+                // pulling the camera away (a quick or big mouse move) or zooming far out drops the focus
+                lockFlick = Vector2.Lerp(lockFlick, Vector2.zero, 1f - Mathf.Exp(-3f * dt)) + look;
+                yaw += look.x * 0.35f;   // the camera still answers the mouse a little while focused
                 pitch = Mathf.Clamp(pitch - look.y * 0.5f, minPitch, maxPitch);
+                if (lockFlick.magnitude > breakFocusFlick || targetDistance > breakFocusZoom) Release();
             }
             else
             {
@@ -165,6 +171,9 @@ namespace Goblingame.TestScene
             transform.SetPositionAndRotation(pos, rot);
         }
 
+        /// <summary>Drop the focus and stay free until the fight is over or F is pressed.</summary>
+        private void Release() { locked = null; manualRelease = true; manualReleaseUntil = Time.time + 2f; lockFlick = Vector2.zero; }
+
         private void UpdateLock(Vector2 look)
         {
             if (locked != null)
@@ -173,12 +182,24 @@ namespace Goblingame.TestScene
                     Flat(locked.transform.position - target.position).magnitude > loseFocusDistance;
                 if (lost) { locked = null; manualRelease = false; }
             }
-            if (manualRelease && Time.time > manualReleaseUntil && FindBest(autoFocusRadius, false) == null) manualRelease = false;
-            if (locked == null && autoFocus && !manualRelease)
+            // stay free while any enemy is still fighting nearby; re-arm auto focus once the area is calm
+            if (manualRelease && Time.time > manualReleaseUntil && !AnyEngaged(autoFocusRadius * 1.5f)) manualRelease = false;
+            if (locked == null && autoFocus && !manualRelease && targetDistance <= breakFocusZoom)
             {
                 var candidate = FindBest(autoFocusRadius, false);
-                if (candidate != null && candidate.IsEngaged) locked = candidate;
+                // only grab enemies the player is roughly looking at
+                if (candidate != null && candidate.IsEngaged &&
+                    Vector3.Angle(PlanarForward, Flat(candidate.transform.position - target.position)) < 80f)
+                { locked = candidate; lockFlick = Vector2.zero; }
             }
+        }
+
+        private bool AnyEngaged(float radius)
+        {
+            foreach (var e in EnemyActor.All)
+                if (e != null && e.IsEngaged && e.Health != null && !e.Health.IsDead &&
+                    Flat(e.transform.position - target.position).magnitude < radius) return true;
+            return false;
         }
 
         private EnemyActor FindBest(float radius, bool preferView)
@@ -197,23 +218,6 @@ namespace Goblingame.TestScene
                 if (score < bestScore) { bestScore = score; best = enemy; }
             }
             return best;
-        }
-
-        private void SwitchTarget(float direction)
-        {
-            if (locked == null) return;
-            Vector3 from = Flat(locked.transform.position - target.position);
-            EnemyActor best = null; float bestAngle = 180f;
-            foreach (var enemy in EnemyActor.All)
-            {
-                if (enemy == null || enemy == locked || enemy.Health == null || enemy.Health.IsDead) continue;
-                Vector3 d = Flat(enemy.transform.position - target.position);
-                if (d.magnitude > loseFocusDistance) continue;
-                float angle = Vector3.SignedAngle(from, d, Vector3.up);
-                if (Mathf.Sign(angle) != direction) continue;
-                if (Mathf.Abs(angle) < bestAngle) { bestAngle = Mathf.Abs(angle); best = enemy; }
-            }
-            if (best != null) locked = best;
         }
 
         private static Vector3 Flat(Vector3 v) { v.y = 0f; return v; }

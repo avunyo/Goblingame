@@ -12,6 +12,21 @@ namespace Goblingame.TestScene
         [SerializeField, Min(0f)] private float runSpeed = 5.5f;
         [SerializeField, Min(0f)] private float speedChangeRate = 12f;
         [SerializeField, Min(0f)] private float turnSpeed = 540f;
+        [Header("Jump")]
+        [SerializeField, Min(0f)] private float jumpHeight = 1.15f;
+        [SerializeField, Min(0f)] private float gravity = 22f;
+        [SerializeField, Range(0f, 1f)] private float airControl = 0.45f;
+        [SerializeField] private float coyoteTime = 0.12f, jumpBuffer = 0.15f;
+        private float lastGroundedTime = -9f, jumpPressedTime = -9f, airborneSince;
+        private Vector3 airVelocity;
+        private bool wasGrounded = true;
+        public bool IsAirborne { get; private set; }
+        public float VerticalSpeed => verticalSpeed;
+        public float AirTime => IsAirborne ? Time.time - airborneSince : 0f;
+        /// <summary>Raised on touchdown with the downward speed at impact (m/s).</summary>
+        public event System.Action<float> Landed;
+        /// <summary>Request a jump (also used by the automated playtest).</summary>
+        public void RequestJump() { jumpPressedTime = Time.time; }
         private CharacterController controller;
         private ThirdPersonFollow followCamera;
         private float verticalSpeed;
@@ -138,12 +153,42 @@ namespace Goblingame.TestScene
                 transform.rotation = Quaternion.RotateTowards(transform.rotation,
                     Quaternion.LookRotation(direction), turnSpeed * Time.deltaTime);
 
-            if (controller.isGrounded && verticalSpeed < 0f) verticalSpeed = -2f;
-            verticalSpeed += -20f * Time.deltaTime;
+            // ── jump (buffered press + coyote time so it never feels like it was eaten)
+            bool grounded = controller.isGrounded;
+            if (grounded) lastGroundedTime = Time.time;
+            if (Application.isFocused && keyboard != null && keyboard.spaceKey.wasPressedThisFrame) jumpPressedTime = Time.time;
+            bool canJump = combat == null || (!combat.IsDead && !combat.MovementLocked);
+            if (canJump && Time.time - jumpPressedTime <= jumpBuffer && Time.time - lastGroundedTime <= coyoteTime && verticalSpeed <= 0.1f)
+            {
+                verticalSpeed = Mathf.Sqrt(2f * gravity * jumpHeight);
+                jumpPressedTime = lastGroundedTime = -9f;
+                airVelocity = direction * horizontalSpeed;
+                grounded = false;
+            }
+            if (grounded && verticalSpeed < 0f) verticalSpeed = -2f;
+            verticalSpeed -= gravity * Time.deltaTime;
+
+            // in the air keep the take-off momentum, steer only a little
+            Vector3 planar = direction * horizontalSpeed;
+            if (!grounded)
+            {
+                Vector3 want = direction.sqrMagnitude > 0.001f ? direction * (running ? runSpeed : moveSpeed) : airVelocity;
+                airVelocity = Vector3.MoveTowards(airVelocity, want, speedChangeRate * airControl * Time.deltaTime);
+                planar = airVelocity;
+            }
+            else airVelocity = planar;
+
             Vector3 before = transform.position;
             Vector3 push = externalVelocity;
             externalVelocity = Vector3.MoveTowards(externalVelocity, Vector3.zero, 18f * Time.deltaTime);
-            controller.Move((direction * horizontalSpeed + push + Vector3.up * verticalSpeed) * Time.deltaTime);
+            float fallSpeed = -verticalSpeed;
+            controller.Move((planar + push + Vector3.up * verticalSpeed) * Time.deltaTime);
+            bool nowGrounded = controller.isGrounded;
+            if (!nowGrounded && wasGrounded) airborneSince = Time.time;   // jumped or walked off a ledge
+            if (nowGrounded && !wasGrounded) { horizontalSpeed = Mathf.Min(airVelocity.magnitude, running ? runSpeed : moveSpeed); Landed?.Invoke(Mathf.Max(0f, fallSpeed)); }
+            // tiny steps / slopes do not count as being airborne
+            IsAirborne = !nowGrounded && (verticalSpeed > 0f || Time.time - airborneSince > 0.12f);
+            wasGrounded = nowGrounded;
             Vector3 displacement = transform.position - before;
             displacement.y = 0f;
             float yaw = transform.eulerAngles.y;

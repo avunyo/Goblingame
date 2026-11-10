@@ -64,6 +64,10 @@ namespace Goblingame.TestScene
         private static readonly int MoveSpeedParam = Animator.StringToHash("MoveSpeed");
         private bool hasMoveSpeed;
         private float bank, pitchLean;
+        // procedural jump pose (the goblin has no jump clip)
+        private Transform thighL, thighR, shinL, shinR, upperArmL, upperArmR, spine;
+        private float airPose, landPose;
+        private Vector3 baseModelScale;
 
         private GoblinMovement movement;
         private ThirdPersonFollow view;
@@ -124,6 +128,9 @@ namespace Goblingame.TestScene
             }
             baseModelPosition = animator.transform.localPosition;
             baseModelRotation = animator.transform.localRotation;
+            baseModelScale = animator.transform.localScale;
+            FindBones();
+            if (movement != null) movement.Landed += OnLanded;
             animator.Play(Animator.StringToHash("Base Layer.Idle"), 0, 0f); animator.Update(0f);
             animator.transform.localRotation = baseModelRotation;
             currentState = "Idle";
@@ -146,6 +153,15 @@ namespace Goblingame.TestScene
             if (IsDead)
             {
                 if (focused && keyboard != null && keyboard.rKey.wasPressedThisFrame) Respawn();
+                return;
+            }
+
+            // in the air: no attacks / guard, settle into the jump pose (applied in LateUpdate)
+            if (movement != null && movement.IsAirborne && !attacking)
+            {
+                if (blocking) blocking = false;
+                gestureClock = -1f; ScheduleGesture();
+                ChangeState("Idle", 0.12f);
                 return;
             }
 
@@ -426,6 +442,44 @@ namespace Goblingame.TestScene
             else if (hitStopActive) { Time.timeScale = 1f; hitStopActive = false; }
         }
         private void OnDisable() { if (hitStopActive) { Time.timeScale = 1f; hitStopActive = false; } }
+        private void OnDestroy() { if (movement != null) movement.Landed -= OnLanded; }
+        private void OnLanded(float fallSpeed) { landPose = Mathf.Clamp(fallSpeed / 8f, 0.35f, 1f); if (view != null && fallSpeed > 9f) view.Shake(0.3f); }
+
+        private void FindBones()
+        {
+            foreach (var t in animator.GetComponentsInChildren<Transform>())
+            {
+                string n = System.Text.RegularExpressions.Regex.Replace(t.name.ToLowerInvariant(), "[^a-z0-9]", "");
+                if (n.EndsWith("thighl")) thighL = t; else if (n.EndsWith("thighr")) thighR = t;
+                else if (n.EndsWith("shinl")) shinL = t; else if (n.EndsWith("shinr")) shinR = t;
+                else if (n.EndsWith("upperarml")) upperArmL = t; else if (n.EndsWith("upperarmr")) upperArmR = t;
+                else if (n.EndsWith("spine002") || (spine == null && n.EndsWith("spine001"))) spine = t;
+            }
+            if (thighL == null || shinL == null) Debug.LogWarning("GoblinCombat: leg bones not found — jump pose disabled.");
+        }
+
+        private static void Turn(Transform bone, float degrees, Vector3 axis) { if (bone != null && degrees != 0f) bone.rotation = Quaternion.AngleAxis(degrees, axis) * bone.rotation; }
+
+        /// <summary>Tucked legs and balancing arms in the air; knees give on touchdown.</summary>
+        private void ApplyJumpPose(float dt)
+        {
+            bool air = movement != null && movement.IsAirborne && !IsDead;
+            airPose = Mathf.MoveTowards(airPose, air ? 1f : 0f, dt * (air ? 7f : 12f));
+            landPose = Mathf.MoveTowards(landPose, 0f, dt * 4.5f);
+            if (airPose <= 0f && landPose <= 0f) return;
+            Vector3 right = transform.right, fwd = transform.forward;
+            float vy = movement != null ? movement.VerticalSpeed : 0f;
+            float tuck = airPose * (0.65f + 0.35f * Mathf.Clamp01(1f - Mathf.Abs(vy) / 6f));   // tightest at the apex
+            float knee = landPose * Mathf.Sin(Mathf.Clamp01(landPose) * Mathf.PI * 0.5f);
+            Turn(spine, 7f * tuck + 10f * knee, right);
+            Turn(thighL, -55f * tuck - 30f * knee, right); Turn(thighR, -40f * tuck - 30f * knee, right);
+            Turn(shinL, 80f * tuck + 55f * knee, right); Turn(shinR, 65f * tuck + 55f * knee, right);
+            Turn(upperArmL, -38f * airPose, fwd); Turn(upperArmR, 38f * airPose, fwd);
+            Turn(upperArmL, -18f * airPose, right); Turn(upperArmR, -18f * airPose, right);
+            // the body sinks into the landing
+            animator.transform.position += Vector3.down * 0.13f * knee;
+            animator.transform.localScale = new Vector3(baseModelScale.x * (1f + 0.04f * knee), baseModelScale.y * (1f - 0.07f * knee), baseModelScale.z * (1f + 0.04f * knee));
+        }
 
         private static Vector3 Flat(Vector3 v) { v.y = 0f; return v; }
 
@@ -447,6 +501,8 @@ namespace Goblingame.TestScene
                 animator.transform.rotation = Quaternion.AngleAxis(pitchLean, transform.right) *
                                               Quaternion.AngleAxis(bank, transform.forward) * animator.transform.rotation;
             }
+            animator.transform.localScale = baseModelScale;
+            ApplyJumpPose(Time.deltaTime);
             if (flinch > 0f)
             {
                 float angle = Mathf.Sin(flinch * Mathf.PI) * 11f;

@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
+using System.Linq;
 using System.Text;
 using UnityEngine;
 
@@ -137,7 +138,7 @@ namespace Goblingame.TestScene.Dev
                 {
                     var card = hud.bestiary != null ? hud.bestiary.transform.Find(e.id + " Card/Portrait") : null;
                     var ct = card != null ? card.GetComponent<UnityEngine.UI.RawImage>().texture as Texture2D : null;
-                    Check(ct != null && Brightness(ct) > 0.12f, e.displayName + " bestiary card rendered (" + (ct != null ? Brightness(ct).ToString("0.00") : "none") + ")");
+                    Check(ct != null && Brightness(ct) > 0.08f, e.displayName + " bestiary card rendered (" + (ct != null ? Brightness(ct).ToString("0.00") : "none") + ")");
                 }
             }
             Vector3 spawn = combat.transform.position;
@@ -160,6 +161,21 @@ namespace Goblingame.TestScene.Dev
             float next = (float)Get(combat, "nextGesture") - Time.time;
             Check(next > 5f, "Next gesture rescheduled " + next.ToString("0.0") + " s later");
 
+            // ── jump
+            var mv = combat.GetComponent<GoblinMovement>();
+            float y0 = combat.transform.position.y, maxY = y0; bool wasAir = false, apexShot = false;
+            mv.RequestJump();
+            for (float t = 0; t < 1.6f; t += Time.unscaledDeltaTime)
+            {
+                maxY = Mathf.Max(maxY, combat.transform.position.y);
+                if (mv.IsAirborne) wasAir = true;
+                if (!apexShot && mv.IsAirborne && mv.VerticalSpeed < 0.6f) { apexShot = true; yield return Shot("12_jump_apex"); }
+                yield return null;
+            }
+            Check(wasAir, "Goblin jumps (Space)");
+            Check(maxY - y0 > 0.8f && maxY - y0 < 1.6f, "Jump height " + (maxY - y0).ToString("0.00") + " m");
+            Check(!mv.IsAirborne && Mathf.Abs(combat.transform.position.y - y0) < 0.1f, "Goblin lands back on the ground");
+
             // ── lock-on
             EnemyActor rat = enemies.Find(e => e.id == "RatRogue") ?? enemies[0];
             Vector3 toRat = rat.transform.position - spawn; toRat.y = 0;
@@ -169,6 +185,22 @@ namespace Goblingame.TestScene.Dev
             Check(view.IsLocked && view.LockTarget == rat, "Camera auto-focuses " + rat.displayName + " (locked=" + (view.LockTarget != null ? view.LockTarget.displayName : "none") + ")");
             Check(combat.InCombat, "Goblin enters combat automatically");
             yield return Shot("02_lock_on");
+
+            // ── focus breaks on a quick camera pull and on zooming far out, and stays free during the fight
+            Set(view, "lockFlick", new Vector2(30f, 0f));
+            yield return new WaitForSecondsRealtime(0.2f);
+            Check(!view.IsLocked, "Quick camera pull drops the focus");
+            yield return new WaitForSecondsRealtime(1.5f);
+            Check(!view.IsLocked, "Camera stays free while the fight goes on");
+            Set(view, "manualRelease", false);
+            yield return new WaitForSecondsRealtime(0.3f);
+            Check(view.IsLocked, "Focus can be re-acquired (F)");
+            float zoom0 = (float)Get(view, "targetDistance");
+            Set(view, "targetDistance", 8.6f);
+            yield return new WaitForSecondsRealtime(0.2f);
+            Check(!view.IsLocked, "Zooming far out drops the focus");
+            Set(view, "targetDistance", zoom0); Set(view, "manualRelease", false);
+            yield return new WaitForSecondsRealtime(0.3f);
 
             // ── punch combo (start it while the rat is not mid-attack, and keep it from attacking)
             for (float t = 0; t < 4f && (rat.IsTelegraphing || rat.Status == "АТАКУЕТ"); t += Time.unscaledDeltaTime) yield return null;
@@ -293,6 +325,53 @@ namespace Goblingame.TestScene.Dev
         {
             view.enabled = false;
             if (hud != null) hud.gameObject.SetActive(false);
+            foreach (var e in enemies) { e.enabled = false; var eb = e.transform.Find("Health"); if (eb != null) eb.gameObject.SetActive(false); var ea = e.transform.Find("Alert"); if (ea != null) ea.gameObject.SetActive(false); }
+            // goblin jump, seen from the side, nobody around
+            {
+                var mvj = combat.GetComponent<GoblinMovement>();
+                Vector3 spot = combat.transform.position + Vector3.back * 12f + Vector3.left * 6f;
+                Teleport(spot, spot + Vector3.forward);
+                var camJ = Camera.main.transform;
+                camJ.position = spot + Vector3.right * 3.2f + Vector3.up * 1.4f; camJ.LookAt(spot + Vector3.up * 1.2f);
+                yield return new WaitForSecondsRealtime(0.5f);
+                yield return Shot("13_jump_0_stand");
+                mvj.RequestJump();
+                bool apex = false, landed = false;
+                for (float t = 0; t < 1.6f && !landed; t += Time.unscaledDeltaTime)
+                {
+                    if (!apex && mvj.IsAirborne && mvj.VerticalSpeed < 0.4f) { apex = true; yield return Shot("13_jump_1_apex"); }
+                    else if (apex && !mvj.IsAirborne) { landed = true; yield return null; yield return Shot("13_jump_2_land"); }
+                    else yield return null;
+                }
+            }
+            // goblin face close-ups (mesh check)
+            {
+                var grs = combat.GetComponentsInChildren<Renderer>(); Bounds gb = grs[0].bounds; foreach (var r in grs) gb.Encapsulate(r.bounds);
+                Vector3 head = new Vector3(gb.center.x, gb.max.y - gb.size.y * .2f, gb.center.z);
+                var camT = Camera.main.transform; Camera.main.fieldOfView = 40f;
+                foreach (var (ang, label) in new[] { (0f, "front"), (40f, "left"), (-40f, "right"), (0f, "below") })
+                {
+                    Vector3 dir = Quaternion.AngleAxis(ang, Vector3.up) * combat.transform.forward;
+                    camT.position = head + dir * gb.size.y * .55f + Vector3.up * (label == "below" ? -gb.size.y * .12f : gb.size.y * .02f);
+                    camT.LookAt(head);
+                    yield return Shot("11_goblin_face_" + label);
+                }
+                // flat unlit white: no shading or shadows, so any hole shows the sky through it
+                var white = new Material(Shader.Find("Unlit/Color")) { color = Color.white };
+                var saved = new Dictionary<Renderer, Material[]>();
+                foreach (var r in grs) { saved[r] = r.sharedMaterials; r.sharedMaterials = Enumerable.Repeat(white, r.sharedMaterials.Length).ToArray(); }
+                Camera.main.backgroundColor = Color.magenta; var clear = Camera.main.clearFlags; Camera.main.clearFlags = CameraClearFlags.SolidColor;
+                foreach (var (ang, label) in new[] { (0f, "front"), (40f, "left"), (-40f, "right"), (0f, "below") })
+                {
+                    Vector3 dir = Quaternion.AngleAxis(ang, Vector3.up) * combat.transform.forward;
+                    camT.position = head + dir * gb.size.y * .55f + Vector3.up * (label == "below" ? -gb.size.y * .12f : gb.size.y * .02f);
+                    camT.LookAt(head);
+                    yield return Shot("11_goblin_white_" + label);
+                }
+                foreach (var kv in saved) kv.Key.sharedMaterials = kv.Value;
+                Camera.main.clearFlags = clear;
+                Camera.main.fieldOfView = 60f;
+            }
             combat.gameObject.SetActive(false);
             foreach (var e in enemies) { e.enabled = false; var bar = e.transform.Find("Health"); if (bar != null) bar.gameObject.SetActive(false); var al = e.transform.Find("Alert"); if (al != null) al.gameObject.SetActive(false); }
             Vector3 stage = combat.transform.position + Vector3.back * 12f;

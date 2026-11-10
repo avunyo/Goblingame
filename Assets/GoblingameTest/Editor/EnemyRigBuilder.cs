@@ -110,6 +110,7 @@ namespace Goblingame.TestScene.Editor
                 if (hands.Count == 0) continue;
                 string g = hands.OrderBy(h => (cb.ClosestPoint(h.b.center) - h.b.center).sqrMagnitude).First().group;
                 foreach (var p in comp) p.group = g;
+                SeatWeapon(comp, parts, g, spec, up, fwd, right, H);
                 Debug.Log("[EnemyRig] " + spec.id + " weapon (" + comp.Count + " parts: " + string.Join(",", comp.Take(6).Select(p => p.t.name)) + (comp.Count > 6 ? "…" : "") + ") → " + g);
             }
 
@@ -150,6 +151,22 @@ namespace Goblingame.TestScene.Editor
             if (tail != null) pivots["Tail"] = tail;
             foreach (var p in parts) p.t.SetParent(pivots[p.group], true);
 
+            // ── joint balls: cover the sockets that open when a rigid limb swings
+            foreach (var (g, holder, limbWords) in new[] { ("ArmL", torso, new[] { "arm", "humerus" }), ("ArmR", torso, new[] { "arm", "humerus" }), ("LegL", hips, LegHints), ("LegR", hips, LegHints) })
+            {
+                var limb = parts.Where(p => p.group == g && Has(p.t.name, limbWords) && !Has(p.t.name, WeaponHints)).OrderByDescending(p => p.b.max.y).FirstOrDefault();
+                if (limb == null) continue;
+                var limbRenderer = limb.t.GetComponent<Renderer>();
+                float radius = Mathf.Clamp(Mathf.Min(limb.b.extents.x, Mathf.Min(limb.b.extents.y, limb.b.extents.z)) * 1.15f, H * .025f, H * .08f);
+                var ball = new GameObject(g + " Joint", typeof(MeshFilter), typeof(MeshRenderer));
+                Undo.RegisterCreatedObjectUndo(ball, "Joint");
+                ball.transform.SetParent(holder, false);
+                ball.transform.position = pivots[g].position; ball.transform.rotation = Quaternion.identity;
+                ball.transform.localScale = Vector3.one * (radius * 2f / holder.lossyScale.x);
+                ball.GetComponent<MeshFilter>().sharedMesh = JointMesh();
+                ball.GetComponent<MeshRenderer>().sharedMaterial = limbRenderer != null ? limbRenderer.sharedMaterial : null;
+            }
+
             foreach (var g in new[] { "ArmL", "ArmR" })
             {
                 var piv = pivots[g]; Vector3 rel = piv.position - center;
@@ -173,9 +190,9 @@ namespace Goblingame.TestScene.Editor
             bool hasWeapon = false;
             if (held.Count > 0)
             {
-                Bounds wb = held[0].b; foreach (var p in held) wb.Encapsulate(p.b);
+                Bounds wb = held[0].t.GetComponent<Renderer>().bounds; foreach (var p in held) wb.Encapsulate(p.t.GetComponent<Renderer>().bounds);
                 var fist = parts.Where(p => p.group == mainArm && Has(p.t.name, HandHints)).OrderBy(p => (wb.ClosestPoint(p.b.center) - p.b.center).sqrMagnitude).FirstOrDefault();
-                Vector3 grip = fist != null ? wb.ClosestPoint(fist.b.center) : wb.center;
+                Vector3 grip = fist != null ? fist.b.center : wb.center;
                 var wp = MakePivot("Weapon", pivots[mainArm], grip, fwd);
                 foreach (var p in held) p.t.SetParent(wp, true);
                 hasWeapon = true;
@@ -203,6 +220,81 @@ namespace Goblingame.TestScene.Editor
             }
             EditorUtility.SetDirty(controller); AssetDatabase.SaveAssets();
             return controller;
+        }
+
+        /// <summary>
+        /// Puts a weapon in the fist: grip centre → hand centre, long axis → a natural hold for the attack style.
+        /// Shields are pressed against the forearm instead.
+        /// </summary>
+        private static void SeatWeapon(List<Part> comp, List<Part> parts, string arm, Spec spec, Vector3 up, Vector3 fwd, Vector3 right, float H)
+        {
+            Bounds RB(Part p) => p.t.GetComponent<Renderer>().bounds;
+            Bounds All(IEnumerable<Part> ps) { var l = ps.ToList(); Bounds b = RB(l[0]); foreach (var p in l) b.Encapsulate(RB(p)); return b; }
+            void Move(Quaternion q, Vector3 about, Vector3 delta)
+            {
+                foreach (var p in comp) { p.t.position = about + q * (p.t.position - about) + delta; p.t.rotation = q * p.t.rotation; }
+                foreach (var p in comp) p.b = RB(p);
+            }
+            var handParts = parts.Where(p => p.group == arm && Has(p.t.name, HandHints)).ToList();
+            float side = arm == "ArmR" ? 1f : -1f;
+            if (comp.Any(p => Has(p.t.name, new[] { "shield" })))
+            {
+                var fore = parts.Where(p => p.group == arm && Has(p.t.name, new[] { "forearm", "elbow", "bracer", "cuff" })).ToList();
+                if (fore.Count == 0) return;
+                Vector3 fc = All(fore).center;
+                Vector3 contact = All(comp).ClosestPoint(fc);
+                Move(Quaternion.identity, Vector3.zero, fc - contact + right * side * H * .02f);
+                Debug.Log("[EnemyRig] " + spec.id + " shield pressed to the forearm (moved " + (fc - contact).magnitude.ToString("0.00") + " m)");
+                return;
+            }
+            if (handParts.Count == 0) return;
+            var gripParts = comp.Where(p => Has(p.t.name, new[] { "grip", "winding" })).ToList();
+            if (gripParts.Count == 0) gripParts = comp.Where(p => Has(p.t.name, new[] { "shaft" })).ToList();
+            if (gripParts.Count == 0) return;
+            Vector3 gc = All(gripParts).center;
+            Vector3 axis = (All(comp).center - gc).normalized;
+            // hold angle measured from straight up towards forward (degrees)
+            float phi = spec.style == AttackStyle.Stab ? 165f : spec.style == AttackStyle.Slash ? 120f : 150f;
+            Vector3 want = (up * Mathf.Cos(phi * Mathf.Deg2Rad) + fwd * Mathf.Sin(phi * Mathf.Deg2Rad) + right * side * .12f).normalized;
+            Quaternion q = Quaternion.FromToRotation(axis, want);
+            Vector3 hand = All(handParts.OrderBy(h => (RB(h).center - gc).sqrMagnitude).Take(Mathf.Min(3, handParts.Count))).center;
+            Move(q, gc, hand - gc);
+            Debug.Log("[EnemyRig] " + spec.id + " weapon seated in the " + arm + " fist (moved " + (hand - gc).magnitude.ToString("0.00") + " m, turned " + Vector3.Angle(axis, want).ToString("0") + "°)");
+        }
+
+        private static Mesh jointMesh;
+        /// <summary>Low-poly, flat-shaded ball (icosphere, 1 subdivision) saved as an asset.</summary>
+        private static Mesh JointMesh()
+        {
+            const string path = "Assets/EnemyCast/Animations/JointBall.asset";
+            if (jointMesh != null) return jointMesh;
+            jointMesh = AssetDatabase.LoadAssetAtPath<Mesh>(path);
+            if (jointMesh != null) return jointMesh;
+            float t = (1f + Mathf.Sqrt(5f)) / 2f;
+            var v = new[] { new Vector3(-1, t, 0), new Vector3(1, t, 0), new Vector3(-1, -t, 0), new Vector3(1, -t, 0), new Vector3(0, -1, t), new Vector3(0, 1, t),
+                new Vector3(0, -1, -t), new Vector3(0, 1, -t), new Vector3(t, 0, -1), new Vector3(t, 0, 1), new Vector3(-t, 0, -1), new Vector3(-t, 0, 1) };
+            int[] f = { 0,11,5, 0,5,1, 0,1,7, 0,7,10, 0,10,11, 1,5,9, 5,11,4, 11,10,2, 10,7,6, 7,1,8, 3,9,4, 3,4,2, 3,2,6, 3,6,8, 3,8,9, 4,9,5, 2,4,11, 6,2,10, 8,6,7, 9,8,1 };
+            var pts = new List<Vector3>();
+            for (int i = 0; i < f.Length; i += 3)
+            {
+                Vector3 a = v[f[i]].normalized, b = v[f[i + 1]].normalized, c = v[f[i + 2]].normalized;
+                Vector3 ab = ((a + b) / 2f).normalized, bc = ((b + c) / 2f).normalized, ca = ((c + a) / 2f).normalized;
+                pts.AddRange(new[] { a, ab, ca, b, bc, ab, c, ca, bc, ab, bc, ca });
+            }
+            var tris = new int[pts.Count];
+            for (int i = 0; i < pts.Count; i += 3)
+            {
+                // wind every flat face so its normal points away from the centre
+                bool outward = Vector3.Dot(Vector3.Cross(pts[i + 1] - pts[i], pts[i + 2] - pts[i]), pts[i] + pts[i + 1] + pts[i + 2]) > 0f;
+                tris[i] = i; tris[i + 1] = outward ? i + 1 : i + 2; tris[i + 2] = outward ? i + 2 : i + 1;
+            }
+            for (int i = 0; i < pts.Count; i++) pts[i] *= .5f;   // unit diameter
+            jointMesh = new Mesh { name = "JointBall" };
+            jointMesh.SetVertices(pts); jointMesh.SetTriangles(tris, 0);
+            jointMesh.RecalculateNormals(); jointMesh.RecalculateBounds();
+            Directory.CreateDirectory("Assets/EnemyCast/Animations");
+            AssetDatabase.CreateAsset(jointMesh, path);
+            return jointMesh;
         }
 
         private static Transform MakePivot(string name, Transform parent, Vector3 world, Vector3 fwd)
@@ -288,6 +380,7 @@ namespace Goblingame.TestScene.Editor
             p.R("ArmL", -3f * Mathf.Sin(ph + .4f), 0, -4f - 2f * Mathf.Sin(ph));
             p.R("ArmR", -3f * Mathf.Sin(ph + .9f), 0, 4f + 2f * Mathf.Sin(ph));
             p.R("Tail", 0, 18f * Mathf.Sin(ph), 6f * Mathf.Sin(ph * 2f));
+            p.R("Weapon", 3f * Mathf.Sin(ph + 1.3f), 4f * Mathf.Sin(ph + .2f), 0);
             p.hipsOffset = Vector3.up * (.006f * k * Mathf.Sin(ph * 2f));
             if (c.spec.style == AttackStyle.Slash) p.R(c.rightWeapon ? "ArmL" : "ArmR", -35f, 0, 0); // shield held up
         }
@@ -302,6 +395,7 @@ namespace Goblingame.TestScene.Editor
             p.R("Torso", 6f + 2f * Mathf.Sin(ph * 2f), 5f * s, Mathf.Lerp(4f, 8f, heavy) * s);
             p.R("Head", -4f - 2f * Mathf.Sin(ph * 2f), -4f * s, -Mathf.Lerp(3f, 6f, heavy) * s);
             p.R("Tail", 0, 25f * Mathf.Sin(ph + 1f), 0);
+            p.R("Weapon", 10f * Mathf.Sin(ph - .8f), 0, 4f * Mathf.Sin(ph * 2f));   // the weapon lags behind the swinging arm
             p.hipsOffset = Vector3.up * (Mathf.Lerp(.025f, .04f, heavy) * (0.5f - 0.5f * Mathf.Cos(ph * 2f)));
         }
 
@@ -321,6 +415,7 @@ namespace Goblingame.TestScene.Editor
                 case AttackStyle.Stab:
                     windup.R(main, 45f, 0, 10f * sign); windup.R(off, -25f, 0, -10f * sign); windup.R("Torso", -6f, -25f * sign, 0); windup.R("Head", 4f, 15f * sign, 0);
                     windup.hipsOffset = new Vector3(0, -.03f, -.04f);
+                    windup.R("Weapon", 25f); strike.R("Weapon", -15f);
                     strike.R(main, -88f, 0, -5f * sign); strike.R(off, 25f, 0, -10f * sign); strike.R("Torso", 16f, 28f * sign, 0); strike.R("Head", -8f, -18f * sign, 0);
                     strike.hipsOffset = new Vector3(0, -.05f, .12f); strike.R("LegL", -22f); strike.R("LegR", 18f); break;
                 case AttackStyle.Slam:
@@ -328,11 +423,12 @@ namespace Goblingame.TestScene.Editor
                     strike.R("ArmL", -55f, 0, -6f); strike.R("ArmR", -55f, 0, 6f); strike.R("Torso", 28f); strike.R("Head", 12f); strike.hipsOffset = new Vector3(0, -.06f, .06f);
                     strike.R("LegL", -12f); strike.R("LegR", -12f); break;
                 case AttackStyle.Slash:
+                    windup.R("Weapon", -30f); strike.R("Weapon", 25f);
                     windup.R(main, -150f, 0, 25f * sign); windup.R(off, -40f); windup.R("Torso", -8f, -22f * sign, 0); windup.R("Head", -6f, 10f * sign, 0);
                     strike.R(main, -35f, 0, -35f * sign); strike.R(off, -45f); strike.R("Torso", 14f, 26f * sign, 0); strike.R("Head", 6f, -12f * sign, 0);
                     strike.hipsOffset = new Vector3(0, -.03f, .08f); strike.R("LegL", -18f); strike.R("LegR", 14f); break;
                 case AttackStyle.Smash:
-                    windup.R("ArmL", -170f, 0, -8f); windup.R("ArmR", -170f, 0, 8f); windup.R("Weapon", 140f); strike.R("Weapon", 145f); windup.R("Torso", -18f, -10f * sign, 0); windup.R("Head", -12f); windup.hipsOffset = new Vector3(0, .02f, -.05f);
+                    windup.R("ArmL", -170f, 0, -8f); windup.R("ArmR", -170f, 0, 8f); windup.R("Weapon", -25f); strike.R("Weapon", 20f); windup.R("Torso", -18f, -10f * sign, 0); windup.R("Head", -12f); windup.hipsOffset = new Vector3(0, .02f, -.05f);
                     strike.R("ArmL", -25f, 0, -5f); strike.R("ArmR", -25f, 0, 5f); strike.R("Torso", 34f, 8f * sign, 0); strike.R("Head", 14f); strike.hipsOffset = new Vector3(0, -.08f, .1f);
                     strike.R("LegL", -20f); strike.R("LegR", 10f); break;
             }
@@ -355,6 +451,7 @@ namespace Goblingame.TestScene.Editor
             p.R("Torso", -20f * k, 0, 6f * k); p.R("Head", -18f * k, 0, -8f * k);
             p.R("ArmL", 28f * k, 0, -18f * k); p.R("ArmR", 28f * k, 0, 18f * k);
             p.R("Tail", 0, 0, 25f * k);
+            p.R("Weapon", 30f * k, 0, 10f * k);
             p.hipsOffset = new Vector3(0, -.02f * k, -.06f * k);
         }
 

@@ -14,7 +14,7 @@ namespace Goblingame.TestScene.Editor
         static GoblinPlaytestLauncher()
         {
             // the upgrade request (if any) runs first and then calls StartIfRequested itself
-            if (File.Exists(Request) && !File.Exists(Path.Combine(Root, "Temp/GoblinUpgrade.request")))
+            if (File.Exists(Request) && !File.Exists(Path.Combine(Root, "Temp/GoblinUpgrade.request")) && !File.Exists(Path.Combine(Root, "Temp/GoblinMesh.request")))
                 EditorApplication.delayCall += StartIfRequested;
         }
 
