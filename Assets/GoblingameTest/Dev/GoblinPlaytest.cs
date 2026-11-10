@@ -186,6 +186,21 @@ namespace Goblingame.TestScene.Dev
             Check(combat.InCombat, "Goblin enters combat automatically");
             yield return Shot("02_lock_on");
 
+            // ── pulling the mouse while focused really moves the view, past the limit it tears free without snapping back
+            float yawLocked = (float)Get(view, "yaw");
+            Set(view, "lockOffset", new Vector2(25f, 0f));
+            yield return new WaitForSecondsRealtime(0.25f);
+            float yawPulled = (float)Get(view, "yaw");
+            Check(view.IsLocked && Mathf.Abs(Mathf.DeltaAngle(yawLocked, yawPulled)) > 8f, "Mouse pulls the focused camera off the target (" + Mathf.DeltaAngle(yawLocked, yawPulled).ToString("0") + "°)");
+            Set(view, "lockOffset", new Vector2(40f, 0f));
+            yield return null; yield return null;
+            float yawFree = (float)Get(view, "yaw");
+            Check(!view.IsLocked, "Pulling further breaks the focus");
+            yield return new WaitForSecondsRealtime(0.3f);
+            Check(Mathf.Abs(Mathf.DeltaAngle(yawFree, (float)Get(view, "yaw"))) < 3f, "After breaking free the camera stays where it was turned (no snap back)");
+            Set(view, "manualRelease", false);
+            yield return new WaitForSecondsRealtime(0.4f);
+
             // ── focus breaks on a quick camera pull and on zooming far out, and stays free during the fight
             Set(view, "lockFlick", new Vector2(30f, 0f));
             yield return new WaitForSecondsRealtime(0.2f);
@@ -308,6 +323,29 @@ namespace Goblingame.TestScene.Dev
             Check(!combat.IsDead && combat.Health >= combat.MaxHealth - .1f, "Respawn restores health");
             Check((combat.transform.position - spawn).magnitude < 0.5f, "Respawn returns to spawn point");
 
+            // ── air slam on the training dummy
+            if (hud != null && hud.dummy != null)
+            {
+                var dummyT = hud.dummy.GetComponent<DamageableTarget>();
+                dummyT.RestoreHealth();
+                Vector3 dp = hud.dummy.transform.position; Vector3 off = (spawn - dp); off.y = 0; off = off.normalized * 1.3f;
+                Teleport(dp + off, dp);
+                yield return new WaitForSecondsRealtime(0.3f);
+                var mvd = combat.GetComponent<GoblinMovement>();
+                float dummyBefore = dummyT.Health;
+                mvd.RequestJump();
+                yield return new WaitForSecondsRealtime(0.25f);
+                Set(combat, "diving", true); mvd.Dive(16f);
+                yield return Shot("14_dive");
+                for (float t = 0; t < 1.5f && mvd.IsAirborne; t += Time.unscaledDeltaTime) yield return null;
+                yield return new WaitForSecondsRealtime(0.05f);
+                yield return Shot("14_dive_impact");
+                Check(dummyBefore - dummyT.Health >= 20f, "Air slam hits around the landing (" + (dummyBefore - dummyT.Health) + " dmg)");
+                Check(!combat.IsDiving, "Slam ends on landing");
+                yield return new WaitForSecondsRealtime(0.6f);
+                Check(!combat.MovementLocked, "Goblin recovers after the slam");
+            }
+
             // ── bestiary
             if (hud != null && hud.bestiary != null)
             {
@@ -335,13 +373,34 @@ namespace Goblingame.TestScene.Dev
                 camJ.position = spot + Vector3.right * 3.2f + Vector3.up * 1.4f; camJ.LookAt(spot + Vector3.up * 1.2f);
                 yield return new WaitForSecondsRealtime(0.5f);
                 yield return Shot("13_jump_0_stand");
-                mvj.RequestJump();
-                bool apex = false, landed = false;
-                for (float t = 0; t < 1.6f && !landed; t += Time.unscaledDeltaTime)
+                for (int run = 0; run < 2; run++)
                 {
-                    if (!apex && mvj.IsAirborne && mvj.VerticalSpeed < 0.4f) { apex = true; yield return Shot("13_jump_1_apex"); }
-                    else if (apex && !mvj.IsAirborne) { landed = true; yield return null; yield return Shot("13_jump_2_land"); }
-                    else yield return null;
+                    string tag = run == 0 ? "stand" : "run";
+                    Teleport(spot, spot + Vector3.forward);
+                    yield return new WaitForSecondsRealtime(0.3f);
+                    if (run == 1)
+                    {
+                        // run in from behind, jump past the camera's view axis
+                        Teleport(spot + Vector3.back * 4f, spot + Vector3.forward);
+                        mvj.simulatedInput = Vector2.up;
+                        float yawSim = Camera.main.transform.eulerAngles.y;
+                        for (float t = 0; t < 0.9f; t += Time.unscaledDeltaTime) yield return null;
+                    }
+                    mvj.RequestJump();
+                    bool r = false, a = false, f = false, reach = false, landed = false;
+                    for (float t = 0; t < 1.8f && !landed; t += Time.unscaledDeltaTime)
+                    {
+                        float vy = mvj.VerticalSpeed;
+                        camJ.position = combat.transform.position + combat.transform.right * 3.4f + Vector3.up * 1.2f; camJ.LookAt(combat.transform.position + Vector3.up * 1.1f);
+                        if (!r && mvj.IsAirborne && vy > 3f) { r = true; yield return Shot("13_" + tag + "_1_rise"); }
+                        else if (!a && mvj.IsAirborne && Mathf.Abs(vy) < 1f) { a = true; yield return Shot("13_" + tag + "_2_apex"); }
+                        else if (!f && mvj.IsAirborne && vy < -2f && mvj.GroundDistance > 0.45f) { f = true; yield return Shot("13_" + tag + "_3_fall"); }
+                        else if (!reach && mvj.IsAirborne && vy < -2f && mvj.GroundDistance < 0.45f) { reach = true; yield return Shot("13_" + tag + "_4_reach"); }
+                        else if (a && !mvj.IsAirborne) { landed = true; yield return new WaitForSecondsRealtime(0.06f); yield return Shot("13_" + tag + "_5_land"); }
+                        else yield return null;
+                    }
+                    mvj.simulatedInput = Vector2.zero;
+                    yield return new WaitForSecondsRealtime(0.6f);
                 }
             }
             // goblin face close-ups (mesh check)

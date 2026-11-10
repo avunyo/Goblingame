@@ -117,6 +117,7 @@ namespace Goblingame.TestScene.Editor
             // ── pivots
             Vector3 GroupCenter(string g, Vector3 fallback)
             { var gp = parts.Where(p => p.group == g).ToList(); if (gp.Count == 0) return fallback; Bounds b = gp[0].b; foreach (var p in gp) b.Encapsulate(p.b); return b.center; }
+            var jointRadius = new Dictionary<string, float>();
             Vector3 Shoulder(string g)
             {
                 var gp = parts.Where(p => p.group == g && !Has(p.t.name, WeaponHints)).ToList();
@@ -124,6 +125,15 @@ namespace Goblingame.TestScene.Editor
                 // the upper-arm bone itself ("A pose arm", "Humerus"); its inner top corner is the shoulder joint
                 var upper = gp.Where(p => Has(p.t.name, new[] { "arm", "humerus" })).OrderByDescending(p => p.b.max.y).FirstOrDefault();
                 var top = upper ?? gp.OrderByDescending(p => p.b.max.y).First();
+                // joint centre = the torso-side end of the bone's long axis, pulled one radius inside the bone
+                if (BoneAxis(top.t, out Vector3 endA, out Vector3 endB, out float radius))
+                {
+                    Vector3 Flat(Vector3 v) { v.y = 0; return v; }
+                    float da = Flat(endA - mid).magnitude - endA.y * .3f, db = Flat(endB - mid).magnitude - endB.y * .3f;
+                    Vector3 sh = da < db ? endA : endB, hand = da < db ? endB : endA;
+                    jointRadius[g] = radius;
+                    return sh + (hand - sh).normalized * radius;
+                }
                 Vector3 s = top.b.ClosestPoint(new Vector3(mid.x, top.b.max.y, mid.z));
                 s.y = top.b.max.y - top.b.size.y * .08f; return s;
             }
@@ -157,7 +167,9 @@ namespace Goblingame.TestScene.Editor
                 var limb = parts.Where(p => p.group == g && Has(p.t.name, limbWords) && !Has(p.t.name, WeaponHints)).OrderByDescending(p => p.b.max.y).FirstOrDefault();
                 if (limb == null) continue;
                 var limbRenderer = limb.t.GetComponent<Renderer>();
-                float radius = Mathf.Clamp(Mathf.Min(limb.b.extents.x, Mathf.Min(limb.b.extents.y, limb.b.extents.z)) * 1.15f, H * .025f, H * .08f);
+                float radius = jointRadius.TryGetValue(g, out float jr) ? jr * 1.35f
+                    : Mathf.Clamp(Mathf.Min(limb.b.extents.x, Mathf.Min(limb.b.extents.y, limb.b.extents.z)) * 1.15f, H * .025f, H * .08f);
+                radius = Mathf.Clamp(radius, H * .025f, H * .09f);
                 var ball = new GameObject(g + " Joint", typeof(MeshFilter), typeof(MeshRenderer));
                 Undo.RegisterCreatedObjectUndo(ball, "Joint");
                 ball.transform.SetParent(holder, false);
@@ -260,6 +272,32 @@ namespace Goblingame.TestScene.Editor
             Vector3 hand = All(handParts.OrderBy(h => (RB(h).center - gc).sqrMagnitude).Take(Mathf.Min(3, handParts.Count))).center;
             Move(q, gc, hand - gc);
             Debug.Log("[EnemyRig] " + spec.id + " weapon seated in the " + arm + " fist (moved " + (hand - gc).magnitude.ToString("0.00") + " m, turned " + Vector3.Angle(axis, want).ToString("0") + "°)");
+        }
+
+        /// <summary>Principal axis of a part's vertices (world): both ends of the bone and its cross-section radius.</summary>
+        private static bool BoneAxis(Transform part, out Vector3 endA, out Vector3 endB, out float radius)
+        {
+            endA = endB = Vector3.zero; radius = 0f;
+            var mf = part.GetComponent<MeshFilter>();
+            if (mf == null || mf.sharedMesh == null || !mf.sharedMesh.isReadable) return false;
+            var pts = mf.sharedMesh.vertices.Select(v => part.TransformPoint(v)).ToArray();
+            if (pts.Length < 4) return false;
+            Vector3 c = Vector3.zero; foreach (var p in pts) c += p; c /= pts.Length;
+            // covariance + power iteration for the dominant direction
+            float xx = 0, xy = 0, xz = 0, yy = 0, yz = 0, zz = 0;
+            foreach (var p in pts) { var d = p - c; xx += d.x * d.x; xy += d.x * d.y; xz += d.x * d.z; yy += d.y * d.y; yz += d.y * d.z; zz += d.z * d.z; }
+            Vector3 axis = new Vector3(1f, 1f, 1f).normalized;
+            for (int i = 0; i < 32; i++)
+            {
+                axis = new Vector3(xx * axis.x + xy * axis.y + xz * axis.z, xy * axis.x + yy * axis.y + yz * axis.z, xz * axis.x + yz * axis.y + zz * axis.z);
+                if (axis.sqrMagnitude < 1e-12f) return false;
+                axis.Normalize();
+            }
+            float tMin = float.MaxValue, tMax = float.MinValue, r = 0f;
+            foreach (var p in pts) { float t = Vector3.Dot(p - c, axis); tMin = Mathf.Min(tMin, t); tMax = Mathf.Max(tMax, t); r += Vector3.ProjectOnPlane(p - c, axis).magnitude; }
+            radius = r / pts.Length;
+            endA = c + axis * tMin; endB = c + axis * tMax;
+            return tMax - tMin > radius * 1.5f;   // only for elongated bones
         }
 
         private static Mesh jointMesh;

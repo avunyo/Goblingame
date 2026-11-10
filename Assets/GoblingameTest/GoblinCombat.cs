@@ -65,8 +65,16 @@ namespace Goblingame.TestScene
         private bool hasMoveSpeed;
         private float bank, pitchLean;
         // procedural jump pose (the goblin has no jump clip)
-        private Transform thighL, thighR, shinL, shinR, upperArmL, upperArmR, spine;
-        private float airPose, landPose;
+        private Transform thighL, thighR, shinL, shinR, upperArmL, upperArmR, foreArmL, foreArmR, spine;
+        private float airPose, landPose, takeoffPose, reachPose, divePose;
+        [Header("Jump")]
+        [Tooltip("Run-clip moment (s) used as the in-air base pose: one leg forward, one behind.")]
+        [SerializeField] private float airStrideTime = 0.27f;
+        [SerializeField] private float diveDamage = 24f, diveRadius = 2.6f;
+        private bool diving; private float recoverUntil;
+        // combo flow
+        private int lastComboIndex = -1; private float lastComboEnd = -9f;
+        private bool dashAttack; private Vector3 steerDir;
         private Vector3 baseModelScale;
 
         private GoblinMovement movement;
@@ -96,7 +104,8 @@ namespace Goblingame.TestScene
         public bool IsDead => ready && health <= 0f;
         public bool IsBlocking => blocking;
         public bool IsAttacking => attacking;
-        public bool MovementLocked => ready && (IsDead || blocking || attacking);
+        public bool MovementLocked => ready && (IsDead || blocking || attacking || diving || Time.time < recoverUntil);
+        public bool IsDiving => diving;
         public float Health => health;
         public float MaxHealth => maxHealth;
         public bool HasFacing { get; private set; }
@@ -130,7 +139,7 @@ namespace Goblingame.TestScene
             baseModelRotation = animator.transform.localRotation;
             baseModelScale = animator.transform.localScale;
             FindBones();
-            if (movement != null) movement.Landed += OnLanded;
+            if (movement != null) { movement.Landed += OnLanded; movement.Jumped += OnJumped; }
             animator.Play(Animator.StringToHash("Base Layer.Idle"), 0, 0f); animator.Update(0f);
             animator.transform.localRotation = baseModelRotation;
             currentState = "Idle";
@@ -156,22 +165,27 @@ namespace Goblingame.TestScene
                 return;
             }
 
-            // in the air: no attacks / guard, settle into the jump pose (applied in LateUpdate)
-            if (movement != null && movement.IsAirborne && !attacking)
+            bool cursorFree = Cursor.lockState != CursorLockMode.Locked && Cursor.visible;
+            bool wantsBlock = focused && !cursorFree && mouse != null && mouse.rightButton.isPressed;
+            bool punch = focused && !cursorFree && mouse != null && mouse.leftButton.wasPressedThisFrame;
+
+            // in the air: frozen mid-stride run pose as the base, bones are posed in LateUpdate.
+            // LMB in the air = plunging slam.
+            if (movement != null && (movement.IsAirborne || diving) && !attacking)
             {
                 if (blocking) blocking = false;
                 gestureClock = -1f; ScheduleGesture();
-                ChangeState("Idle", 0.12f);
+                if (punch && !diving && movement.AirTime > 0.08f) { diving = true; movement.Dive(16f); lastCombatTime = Time.time; }
+                if (hasMoveSpeed) { if (currentState != "Run") ChangeState("Run", 0.14f, true, airStrideTime); animator.SetFloat(MoveSpeedParam, 0f); }
+                else ChangeState("Idle", 0.12f);
                 return;
             }
+            if (Time.time < recoverUntil) return;   // getting up from the slam
 
             // out-of-combat regeneration
             if (!InCombat && Time.time - lastHurtTime > regenDelay && health < maxHealth)
                 health = Mathf.Min(maxHealth, health + regenPerSecond * dt);
 
-            bool cursorFree = Cursor.lockState != CursorLockMode.Locked && Cursor.visible;
-            bool wantsBlock = focused && !cursorFree && mouse != null && mouse.rightButton.isPressed;
-            bool punch = focused && !cursorFree && mouse != null && mouse.leftButton.wasPressedThisFrame;
             bool headbutt = focused && keyboard != null && keyboard.qKey.wasPressedThisFrame;
             bool moveInput = focused && keyboard != null &&
                 (keyboard.wKey.isPressed || keyboard.aKey.isPressed || keyboard.sKey.isPressed || keyboard.dKey.isPressed);
@@ -190,6 +204,7 @@ namespace Goblingame.TestScene
                 {
                     if (queuedHeadbutt) { StartHeadbutt(); return; }
                     if (queuedPunch && move.state == "Punch" && comboIndex < Combo.Length - 1) { NextPunch(); return; }
+                    if (queuedPunch && move.state == "Headbutt") { comboIndex = 1; NextPunch(); return; }   // headbutt → right-left punches
                     EndAttack(0.3f);
                 }
                 if (attacking) return;
@@ -206,7 +221,14 @@ namespace Goblingame.TestScene
             if (blocking) { blocking = false; ChangeState("Idle", 0.2f); }
 
             if (headbutt && Time.time >= nextHeadbutt) { StartHeadbutt(); return; }
-            if (punch) { comboIndex = -1; NextPunch(); return; }
+            if (punch)
+            {
+                // a slightly late click still continues the combo
+                comboIndex = Time.time - lastComboEnd < 0.22f && lastComboIndex >= 0 && lastComboIndex < Combo.Length - 1 ? lastComboIndex : -1;
+                // attacking out of a sprint: dashing straight punch
+                if (comboIndex == -1 && movement != null && movement.IsRunning && movement.CurrentSpeed > 4f) { comboIndex = 0; dashAttack = true; }
+                NextPunch(); return;
+            }
 
             if (movement != null && movement.IsMoving)
             {
@@ -288,18 +310,22 @@ namespace Goblingame.TestScene
             attacking = true; hitDone = false; queuedPunch = false; queuedHeadbutt = false; blocking = false;
             gestureClock = -1f; lastCombatTime = Time.time;
             attackTarget = PickTarget();
+            steerDir = attackTarget == null ? InputDirection() : Vector3.zero;   // no target: punch where the player steers
             FaceAttackTarget();
             if (attackTarget != null && movement != null)
             {
+                // combo magnetism: every hit slides in to the ideal distance
                 Vector3 to = Flat(attackTarget.transform.position - transform.position);
                 float gap = to.magnitude - attackTarget.Radius - attackReach * 0.7f;
-                if (gap > 0.05f) movement.Push(to.normalized * Mathf.Sqrt(2f * 18f * Mathf.Min(gap, 1.1f)));
+                if (gap > 0.05f) movement.Push(to.normalized * Mathf.Sqrt(2f * 18f * Mathf.Min(gap, dashAttack ? 2.2f : 1.1f)));
             }
+            else if (dashAttack && movement != null) movement.Push(transform.forward * 8f);
         }
 
         private void EndAttack(float blend)
         {
-            attacking = false; comboIndex = -1; queuedPunch = queuedHeadbutt = false;
+            if (move.state == "Punch") { lastComboIndex = comboIndex; lastComboEnd = Time.time; }
+            attacking = false; comboIndex = -1; queuedPunch = queuedHeadbutt = false; dashAttack = false;
             ChangeState("Idle", blend, true, 0f);
         }
 
@@ -307,7 +333,7 @@ namespace Goblingame.TestScene
         {
             DamageableTarget t = attackTarget;
             if (t == null || t.IsDead || preferView) t = PickTarget();
-            if (t == null) return;
+            if (t == null) { if (steerDir.sqrMagnitude > 0.01f && !preferView) { HasFacing = true; FacingDirection = steerDir; } return; }
             HasFacing = true; FacingDirection = Flat(t.transform.position - transform.position);
         }
 
@@ -335,6 +361,7 @@ namespace Goblingame.TestScene
         private void DealHit(Move m)
         {
             float damage = m.state == "Headbutt" ? headbuttDamage : m.heavy ? finisherDamage : punchDamage;
+            if (dashAttack) { damage *= 1.35f; dashAttack = false; }
             bool any = false;
             DamageableTarget single = null; float singleDist = float.MaxValue;
             foreach (var t in DamageableTarget.All)
@@ -442,46 +469,123 @@ namespace Goblingame.TestScene
             else if (hitStopActive) { Time.timeScale = 1f; hitStopActive = false; }
         }
         private void OnDisable() { if (hitStopActive) { Time.timeScale = 1f; hitStopActive = false; } }
-        private void OnDestroy() { if (movement != null) movement.Landed -= OnLanded; }
-        private void OnLanded(float fallSpeed) { landPose = Mathf.Clamp(fallSpeed / 8f, 0.35f, 1f); if (view != null && fallSpeed > 9f) view.Shake(0.3f); }
+        private void OnDestroy() { if (movement != null) { movement.Landed -= OnLanded; movement.Jumped -= OnJumped; } }
+        private void OnJumped() { takeoffPose = 1f; }
+        private void OnLanded(float fallSpeed)
+        {
+            landPose = Mathf.Clamp(fallSpeed / 9f, 0.3f, 1f);
+            if (diving) { diving = false; landPose = 1.15f; recoverUntil = Time.time + 0.38f; DiveImpact(); }
+            else if (view != null && fallSpeed > 9f) view.Shake(0.3f);
+        }
+
+        /// <summary>Air attack lands: everything around is knocked back and staggered.</summary>
+        private void DiveImpact()
+        {
+            bool any = false;
+            foreach (var t in DamageableTarget.All)
+            {
+                if (t == null || t.IsDead || t.transform.IsChildOf(transform)) continue;
+                if (Flat(t.transform.position - transform.position).magnitude - t.Radius > diveRadius) continue;
+                t.TakeHit(new HitInfo { damage = diveDamage, source = transform.position, stagger = 0.9f, knockback = 1.6f, heavy = true });
+                any = true;
+            }
+            lastCombatTime = Time.time;
+            if (view != null) view.Shake(any ? 1.2f : 0.7f);
+            if (any) HitStop(0.1f);
+            ChangeState("Idle", 0.12f, true);
+        }
+
+        private Vector3 InputDirection()
+        {
+            var kb = Keyboard.current; if (kb == null || !Application.isFocused) return Vector3.zero;
+            Vector2 i = new Vector2((kb.dKey.isPressed ? 1 : 0) - (kb.aKey.isPressed ? 1 : 0), (kb.wKey.isPressed ? 1 : 0) - (kb.sKey.isPressed ? 1 : 0));
+            if (i.sqrMagnitude < 0.01f) return Vector3.zero;
+            Vector3 f = view != null ? view.PlanarForward : transform.forward; f.y = 0; f.Normalize();
+            return (f * i.y + Vector3.Cross(Vector3.up, f) * i.x).normalized;
+        }
 
         private void FindBones()
         {
+            // only bones that actually deform the body count (Rigify also has control / ORG / MCH copies)
+            var skinned = new System.Collections.Generic.HashSet<Transform>();
+            foreach (var smr in animator.GetComponentsInChildren<SkinnedMeshRenderer>())
+                if (smr.enabled && smr.gameObject.activeInHierarchy) foreach (var b in smr.bones) if (b != null) skinned.Add(b);
             foreach (var t in animator.GetComponentsInChildren<Transform>())
             {
+                if (skinned.Count > 0 && !skinned.Contains(t)) continue;
                 string n = System.Text.RegularExpressions.Regex.Replace(t.name.ToLowerInvariant(), "[^a-z0-9]", "");
-                if (n.EndsWith("thighl")) thighL = t; else if (n.EndsWith("thighr")) thighR = t;
-                else if (n.EndsWith("shinl")) shinL = t; else if (n.EndsWith("shinr")) shinR = t;
-                else if (n.EndsWith("upperarml")) upperArmL = t; else if (n.EndsWith("upperarmr")) upperArmR = t;
-                else if (n.EndsWith("spine002") || (spine == null && n.EndsWith("spine001"))) spine = t;
+                // Blender metarig names (thigh.L …) and Mixamo names (mixamorig:LeftUpLeg …)
+                if (n.EndsWith("thighl") || n.EndsWith("leftupleg")) thighL = t; else if (n.EndsWith("thighr") || n.EndsWith("rightupleg")) thighR = t;
+                else if (n.EndsWith("shinl") || n.EndsWith("leftleg")) shinL = t; else if (n.EndsWith("shinr") || n.EndsWith("rightleg")) shinR = t;
+                else if (n.EndsWith("upperarml") || n.EndsWith("leftarm")) upperArmL = t; else if (n.EndsWith("upperarmr") || n.EndsWith("rightarm")) upperArmR = t;
+                else if (n.EndsWith("forearml") || n.EndsWith("leftforearm")) foreArmL = t; else if (n.EndsWith("forearmr") || n.EndsWith("rightforearm")) foreArmR = t;
+                else if (n.EndsWith("spine002") || n.EndsWith("spine2") || (spine == null && (n.EndsWith("spine001") || n.EndsWith("spine1")))) spine = t;
             }
-            if (thighL == null || shinL == null) Debug.LogWarning("GoblinCombat: leg bones not found — jump pose disabled.");
+            if (thighL == null || shinL == null)
+            {
+                var names = new System.Text.StringBuilder();
+                foreach (var t in skinned) names.Append(t.name).Append(", ");
+                Debug.LogWarning("GoblinCombat: leg bones not found — jump pose disabled. Skinned bones: " + names);
+            }
+            Debug.Log("[GoblinBones] skinned=" + skinned.Count + " thigh " + (thighL ? thighL.name : "-") + "/" + (thighR ? thighR.name : "-") + " shin " + (shinL ? shinL.name : "-") +
+                      " arm " + (upperArmL ? upperArmL.name : "-") + " fore " + (foreArmL ? foreArmL.name : "-") + " spine " + (spine ? spine.name : "-"));
         }
 
         private static void Turn(Transform bone, float degrees, Vector3 axis) { if (bone != null && degrees != 0f) bone.rotation = Quaternion.AngleAxis(degrees, axis) * bone.rotation; }
 
-        /// <summary>Tucked legs and balancing arms in the air; knees give on touchdown.</summary>
+        private static Vector3 Flat(Vector3 v) { v.y = 0f; return v; }
+
+        /// <summary>
+        /// Layered jump animation on the goblin's bones (on top of a mid-stride run frame):
+        /// launch → rise (knees pull up) → apex (tucked, arms out for balance) → fall (legs open toward
+        /// the ground) → reach (legs stretch to meet the ground) → landing crouch scaled by the impact.
+        /// A running jump keeps a stride (lead knee high, trail leg behind); a standing jump tucks both.
+        /// </summary>
         private void ApplyJumpPose(float dt)
         {
             bool air = movement != null && movement.IsAirborne && !IsDead;
-            airPose = Mathf.MoveTowards(airPose, air ? 1f : 0f, dt * (air ? 7f : 12f));
-            landPose = Mathf.MoveTowards(landPose, 0f, dt * 4.5f);
-            if (airPose <= 0f && landPose <= 0f) return;
-            Vector3 right = transform.right, fwd = transform.forward;
+            airPose = Mathf.MoveTowards(airPose, air ? 1f : 0f, dt * (air ? 9f : 14f));
+            takeoffPose = Mathf.MoveTowards(takeoffPose, 0f, dt * 4f);
+            landPose = Mathf.MoveTowards(landPose, 0f, dt * 3f);
+            divePose = Mathf.MoveTowards(divePose, diving ? 1f : 0f, dt * 10f);
             float vy = movement != null ? movement.VerticalSpeed : 0f;
-            float tuck = airPose * (0.65f + 0.35f * Mathf.Clamp01(1f - Mathf.Abs(vy) / 6f));   // tightest at the apex
-            float knee = landPose * Mathf.Sin(Mathf.Clamp01(landPose) * Mathf.PI * 0.5f);
-            Turn(spine, 7f * tuck + 10f * knee, right);
-            Turn(thighL, -55f * tuck - 30f * knee, right); Turn(thighR, -40f * tuck - 30f * knee, right);
-            Turn(shinL, 80f * tuck + 55f * knee, right); Turn(shinR, 65f * tuck + 55f * knee, right);
-            Turn(upperArmL, -38f * airPose, fwd); Turn(upperArmR, 38f * airPose, fwd);
-            Turn(upperArmL, -18f * airPose, right); Turn(upperArmR, -18f * airPose, right);
-            // the body sinks into the landing
-            animator.transform.position += Vector3.down * 0.13f * knee;
-            animator.transform.localScale = new Vector3(baseModelScale.x * (1f + 0.04f * knee), baseModelScale.y * (1f - 0.07f * knee), baseModelScale.z * (1f + 0.04f * knee));
-        }
+            bool nearGround = air && vy < -1f && movement.GroundDistance < 0.75f;
+            reachPose = Mathf.MoveTowards(reachPose, nearGround ? 1f : 0f, dt * 10f);
+            if (airPose <= 0f && landPose <= 0f && takeoffPose <= 0f) return;
 
-        private static Vector3 Flat(Vector3 v) { v.y = 0f; return v; }
+            Vector3 right = transform.right, fwd = transform.forward;
+            float rise = Mathf.Clamp01(vy / 5f), fall = Mathf.Clamp01(-vy / 6f), apex = 1f - Mathf.Max(rise, fall);
+            float stride = Mathf.Clamp01((movement != null ? movement.AirSpeed : 0f) / 3f);
+            float w = airPose * (1f - reachPose * .6f);
+
+            // legs (negative thigh angle = knee forward / up, positive shin = foot back)
+            float lead = -45f * rise - 72f * apex - 28f * fall;
+            float trail = Mathf.Lerp(lead * .9f, 18f * rise - 12f * apex - 6f * fall, stride);
+            float shinLead = 55f * rise + 100f * apex + 35f * fall;
+            float shinTrail = Mathf.Lerp(shinLead * .9f, 75f * rise + 70f * apex + 30f * fall, stride);
+            float reachThigh = -22f * reachPose * airPose, reachShin = 12f * reachPose * airPose;
+            float knee = landPose * Mathf.Sin(Mathf.Clamp01(landPose) * Mathf.PI * .5f);   // eased landing crouch
+            float dive = divePose;
+            Turn(thighL, lead * w + reachThigh - 48f * knee - 30f * dive, right);
+            Turn(thighR, trail * w + reachThigh - 40f * knee - 30f * dive, right);
+            Turn(shinL, shinLead * w + reachShin + 88f * knee + 40f * dive, right);
+            Turn(shinR, shinTrail * w + reachShin + 80f * knee + 40f * dive, right);
+
+            // arms: swing up on launch, open wide at the apex, rise for balance while falling, raised overhead for the slam
+            float armsFwd = -70f * takeoffPose - 35f * rise * airPose - 10f * apex * airPose - 25f * fall * airPose - 120f * dive;
+            float armsOut = (20f * rise + 50f * apex + 65f * fall) * airPose * (1f - dive) + 25f * knee;
+            Turn(upperArmL, armsFwd, right); Turn(upperArmR, armsFwd, right);
+            Turn(upperArmL, -armsOut, fwd); Turn(upperArmR, armsOut, fwd);
+            float elbow = (30f * airPose + 20f * knee) * (1f - dive * .7f);
+            Turn(foreArmL, -elbow, right); Turn(foreArmR, -elbow, right);
+
+            // spine: arch on launch, curl at the apex, open while falling, fold into the landing / slam
+            Turn(spine, -12f * takeoffPose + (8f * apex - 5f * fall) * airPose + 18f * knee + 22f * dive, right);
+
+            // the body sinks into the landing
+            animator.transform.position += Vector3.down * 0.16f * knee;
+            animator.transform.localScale = new Vector3(baseModelScale.x * (1f + 0.04f * knee), baseModelScale.y * (1f - 0.07f * knee + 0.04f * takeoffPose), baseModelScale.z * (1f + 0.04f * knee));
+        }
 
         private void LateUpdate()
         {

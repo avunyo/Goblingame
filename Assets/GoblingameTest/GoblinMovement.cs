@@ -25,6 +25,16 @@ namespace Goblingame.TestScene
         public float AirTime => IsAirborne ? Time.time - airborneSince : 0f;
         /// <summary>Raised on touchdown with the downward speed at impact (m/s).</summary>
         public event System.Action<float> Landed;
+        /// <summary>Raised on take-off.</summary>
+        public event System.Action Jumped;
+        /// <summary>Planar speed while airborne (m/s).</summary>
+        public float AirSpeed => airVelocity.magnitude;
+        /// <summary>Distance to the ground below (m); large when nothing is below.</summary>
+        public float GroundDistance { get; private set; }
+        /// <summary>Movement input injected by the automated playtest (editor only use).</summary>
+        [HideInInspector] public Vector2 simulatedInput;
+        /// <summary>Plunge straight down (air attack).</summary>
+        public void Dive(float speed) { verticalSpeed = -Mathf.Abs(speed); airVelocity *= 0.35f; }
         /// <summary>Request a jump (also used by the automated playtest).</summary>
         public void RequestJump() { jumpPressedTime = Time.time; }
         private CharacterController controller;
@@ -131,11 +141,12 @@ namespace Goblingame.TestScene
                 input.x = (keyboard.dKey.isPressed ? 1f : 0f) - (keyboard.aKey.isPressed ? 1f : 0f);
                 input.y = (keyboard.wKey.isPressed ? 1f : 0f) - (keyboard.sKey.isPressed ? 1f : 0f);
             }
+            if (simulatedInput.sqrMagnitude > 0f) input = simulatedInput;
             input = Vector2.ClampMagnitude(input, 1f);
             if (combat != null && combat.MovementLocked) input = Vector2.zero;
             if (combat != null && combat.IsDead) externalVelocity = Vector3.zero;
-            bool running = hasRunController && Application.isFocused && keyboard != null &&
-                (keyboard.leftShiftKey.isPressed || keyboard.rightShiftKey.isPressed) && input.sqrMagnitude > 0f;
+            bool running = hasRunController && input.sqrMagnitude > 0f &&
+                (simulatedInput.sqrMagnitude > 0f || (Application.isFocused && keyboard != null && (keyboard.leftShiftKey.isPressed || keyboard.rightShiftKey.isPressed)));
             horizontalSpeed = Mathf.MoveTowards(horizontalSpeed, input.sqrMagnitude > 0f ?
                 (running ? runSpeed : moveSpeed) : 0f, speedChangeRate * Time.deltaTime);
             Vector3 forward = followCamera != null ? followCamera.PlanarForward :
@@ -164,6 +175,7 @@ namespace Goblingame.TestScene
                 jumpPressedTime = lastGroundedTime = -9f;
                 airVelocity = direction * horizontalSpeed;
                 grounded = false;
+                Jumped?.Invoke();
             }
             if (grounded && verticalSpeed < 0f) verticalSpeed = -2f;
             verticalSpeed -= gravity * Time.deltaTime;
@@ -189,6 +201,7 @@ namespace Goblingame.TestScene
             // tiny steps / slopes do not count as being airborne
             IsAirborne = !nowGrounded && (verticalSpeed > 0f || Time.time - airborneSince > 0.12f);
             wasGrounded = nowGrounded;
+            GroundDistance = nowGrounded ? 0f : Physics.Raycast(transform.position + Vector3.up * 0.1f, Vector3.down, out RaycastHit gh, 6f, ~0, QueryTriggerInteraction.Ignore) ? gh.distance - 0.1f : 6f;
             Vector3 displacement = transform.position - before;
             displacement.y = 0f;
             float yaw = transform.eulerAngles.y;

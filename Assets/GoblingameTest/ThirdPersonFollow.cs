@@ -31,7 +31,9 @@ namespace Goblingame.TestScene
         [SerializeField] private float focusPitch = 16f;
         [SerializeField] private float shoulderOffset = 0.55f;
         [Tooltip("Mouse movement (degrees, accumulated over ~0.3 s) that breaks the focus.")]
-        [SerializeField] private float breakFocusFlick = 14f;
+        [SerializeField] private float breakFocusFlick = 22f;
+        [Tooltip("Degrees the mouse may push the view off the target before the focus lets go.")]
+        [SerializeField] private float breakFocusAngle = 35f;
         [Tooltip("Zooming out past this distance breaks the focus.")]
         [SerializeField] private float breakFocusZoom = 7f;
 
@@ -41,7 +43,7 @@ namespace Goblingame.TestScene
         private EnemyActor locked;
         private bool manualRelease;          // player cancelled focus; don't auto-grab the same fight
         private float manualReleaseUntil;
-        private Vector2 lockFlick;
+        private Vector2 lockFlick, lockOffset;
         private Camera cam;
 
         public EnemyActor LockTarget => locked;
@@ -92,7 +94,7 @@ namespace Goblingame.TestScene
             if (toggle)
             {
                 if (locked != null) Release();
-                else { manualRelease = false; locked = FindBest(14f, true); lockFlick = Vector2.zero; }
+                else { manualRelease = false; locked = FindBest(14f, true); lockFlick = lockOffset = Vector2.zero; }
             }
         }
 
@@ -115,20 +117,26 @@ namespace Goblingame.TestScene
 
             if (locked != null)
             {
-                // Face the enemy from behind the goblin.
+                // The focus aims the camera at the enemy, but the mouse really moves the view:
+                // it pushes the camera off the target (springing back when released) and a hard
+                // pull tears the camera free, continuing the turn without snapping back.
+                lockOffset += look;
+                lockOffset.x = Mathf.Clamp(lockOffset.x, -breakFocusAngle * 1.5f, breakFocusAngle * 1.5f);
+                lockOffset.y = Mathf.Clamp(lockOffset.y, -30f, 30f);
+                if (look.sqrMagnitude < 0.0001f) lockOffset = Vector2.Lerp(lockOffset, Vector2.zero, 1f - Mathf.Exp(-2.5f * dt));
+                lockFlick = Vector2.Lerp(lockFlick, Vector2.zero, 1f - Mathf.Exp(-8f * dt)) + look;   // ≈ recent mouse speed
+
                 Vector3 to = locked.Health.HitPoint - target.position; to.y = 0f;
                 if (to.sqrMagnitude > 0.01f)
                 {
-                    float wantYaw = Mathf.Atan2(to.x, to.z) * Mathf.Rad2Deg;
+                    float wantYaw = Mathf.Atan2(to.x, to.z) * Mathf.Rad2Deg + lockOffset.x;
                     float k = 1f - Mathf.Exp(-focusTurnSharpness * dt);
-                    yaw = Mathf.LerpAngle(yaw, wantYaw, k);
-                    pitch = Mathf.Lerp(pitch, focusPitch, k * 0.5f);
+                    // mouse input is applied directly; only the "return to target" part is smoothed
+                    yaw = Mathf.LerpAngle(yaw + look.x, wantYaw, k);
+                    pitch = Mathf.Clamp(Mathf.Lerp(pitch - look.y, focusPitch - lockOffset.y, k * 0.5f), minPitch, maxPitch);
                 }
-                // pulling the camera away (a quick or big mouse move) or zooming far out drops the focus
-                lockFlick = Vector2.Lerp(lockFlick, Vector2.zero, 1f - Mathf.Exp(-3f * dt)) + look;
-                yaw += look.x * 0.35f;   // the camera still answers the mouse a little while focused
-                pitch = Mathf.Clamp(pitch - look.y * 0.5f, minPitch, maxPitch);
-                if (lockFlick.magnitude > breakFocusFlick || targetDistance > breakFocusZoom) Release();
+                bool pulledAway = Mathf.Abs(lockOffset.x) > breakFocusAngle || lockFlick.magnitude > breakFocusFlick;
+                if (pulledAway || targetDistance > breakFocusZoom) Release();
             }
             else
             {
@@ -172,7 +180,7 @@ namespace Goblingame.TestScene
         }
 
         /// <summary>Drop the focus and stay free until the fight is over or F is pressed.</summary>
-        private void Release() { locked = null; manualRelease = true; manualReleaseUntil = Time.time + 2f; lockFlick = Vector2.zero; }
+        private void Release() { locked = null; manualRelease = true; manualReleaseUntil = Time.time + 2f; lockFlick = lockOffset = Vector2.zero; }
 
         private void UpdateLock(Vector2 look)
         {
@@ -190,7 +198,7 @@ namespace Goblingame.TestScene
                 // only grab enemies the player is roughly looking at
                 if (candidate != null && candidate.IsEngaged &&
                     Vector3.Angle(PlanarForward, Flat(candidate.transform.position - target.position)) < 80f)
-                { locked = candidate; lockFlick = Vector2.zero; }
+                { locked = candidate; lockFlick = lockOffset = Vector2.zero; }
             }
         }
 
