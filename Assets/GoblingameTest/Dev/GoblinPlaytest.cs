@@ -94,6 +94,8 @@ namespace Goblingame.TestScene.Dev
             Check((bool)Get(combat, "ready"), "Combat ready (Punch state found)");
             Check((bool)Get(combat, "hasIdleTime"), "Animator has IdleTime parameter");
             Check((bool)Get(combat, "hasBlockTime"), "Animator has BlockTime parameter");
+            Check((bool)Get(combat, "hasMoveSpeed"), "Walk/Run playback follows movement speed (MoveSpeed parameter)");
+            Check(Mathf.Abs(anim.GetFloat("MoveSpeed") - 0.55f) < 0.6f, "MoveSpeed driven (" + anim.GetFloat("MoveSpeed").ToString("0.00") + ")");
             var enemies = new List<EnemyActor>(EnemyActor.All);
             Check(enemies.Count == 4, "Four enemies registered (" + enemies.Count + ")");
             foreach (var e in enemies)
@@ -104,8 +106,24 @@ namespace Goblingame.TestScene.Dev
                 foreach (var r in rs) b.Encapsulate(r.bounds);
                 Check(model, e.displayName + " uses a real model (" + rs.Length + " parts)");
                 Check(b.size.y > 1.2f && b.size.y < 4.5f, e.displayName + " is a sensible size (" + b.size.y.ToString("0.00") + " m)");
-                Check(b.size.y >= 0.75f * Mathf.Max(b.size.x, b.size.z), e.displayName + " stands upright (h " + b.size.y.ToString("0.00") + " vs w " + Mathf.Max(b.size.x, b.size.z).ToString("0.00") + ")");
+                // a model lying on its side measures ~0.3; swinging arms / weapons while walking stay above 0.6
+                bool upright = b.size.y >= 0.6f * Mathf.Max(b.size.x, b.size.z);
+                Check(upright, e.displayName + " stands upright (h " + b.size.y.ToString("0.00") + " vs w " + Mathf.Max(b.size.x, b.size.z).ToString("0.00") + ", state " + e.Status + ")");
+                if (!upright)
+                {
+                    Vector3 c0 = e.transform.position; Renderer far = null; float fd = 0;
+                    foreach (var r in rs) { var d = r.bounds.center - c0; d.y = 0; if (d.magnitude > fd) { fd = d.magnitude; far = r; } }
+                    Line("info: farthest part " + far.name + " at " + fd.ToString("0.00") + " m, parent " + far.transform.parent.name + " localRot " + far.transform.parent.localEulerAngles.ToString("0"));
+                }
                 Check(Mathf.Abs(b.min.y - e.transform.position.y) < 0.3f, e.displayName + " stands on the ground (feet at " + (b.min.y - e.transform.position.y).ToString("0.00") + ")");
+                var ea = e.visual != null ? e.visual.GetComponent<Animator>() : null;
+                Check(ea != null && ea.runtimeAnimatorController != null && ea.runtimeAnimatorController.animationClips.Length >= 6,
+                    e.displayName + " has keyframed clips (" + (ea != null && ea.runtimeAnimatorController != null ? ea.runtimeAnimatorController.animationClips.Length : 0) + ")");
+                foreach (var bone in new[] { "Rig/Hips/Torso/Head", "Rig/Hips/Torso/ArmL", "Rig/Hips/Torso/ArmR", "Rig/Hips/LegL", "Rig/Hips/LegR" })
+                {
+                    var t = e.visual != null ? e.visual.Find(bone) : null;
+                    Check(t != null && t.childCount > 0, e.displayName + " rig " + bone.Substring(bone.LastIndexOf('/') + 1) + " has " + (t != null ? t.childCount : 0) + " parts");
+                }
                 var bar = e.transform.Find("Health");
                 Check(bar != null && bar.gameObject.activeInHierarchy && bar.GetComponent<Canvas>().enabled && bar.position.y > b.max.y,
                     e.displayName + " health bar above head (" + (bar != null ? bar.position.y.ToString("0.00") : "none") + " vs head " + b.max.y.ToString("0.00") + ")");
@@ -213,18 +231,39 @@ namespace Goblingame.TestScene.Dev
             while (!rat.Health.IsDead) { rat.Health.TakeHit(new HitInfo { damage = 30, source = combat.transform.position }); yield return new WaitForSecondsRealtime(.15f); }
             yield return new WaitForSecondsRealtime(1.2f);
             Check(progression == null || progression.Experience + progression.Level * 1000 > xp0, "Kill grants experience");
+            var ratRig = rat.visual.Find("Rig");
+            if (ratRig != null)
+            {
+                float fall = Vector3.Angle(ratRig.up, Vector3.up);
+                Check(fall > 50f, "Death animation topples the rat (" + fall.ToString("0") + "°)");
+            }
             Check(view.LockTarget != rat, "Camera releases the dead target");
             yield return Shot("05_rat_down");
 
-            // ── look at every enemy model
+            // ── every other enemy: notice, walk, wind up and strike (screenshot of the swing)
             foreach (var e in enemies)
             {
                 if (e == rat) continue;
+                Set(combat, "health", combat.MaxHealth);
                 Vector3 front = e.transform.position + e.transform.forward * 4.5f;
                 Teleport(front, e.transform.position);
                 yield return new WaitForSecondsRealtime(1.3f);
                 yield return Shot("06_" + e.id);
                 Check(e.IsEngaged, e.displayName + " notices the goblin");
+                var torso = e.visual.Find("Rig/Hips/Torso");
+                var armL = e.visual.Find("Rig/Hips/Torso/ArmL"); var armR = e.visual.Find("Rig/Hips/Torso/ArmR");
+                Quaternion l0 = armL != null ? armL.localRotation : Quaternion.identity, r0 = armR != null ? armR.localRotation : Quaternion.identity;
+                float waited2 = 0f; float maxArm = 0f; bool swingShot = false;
+                while (waited2 < 7f)
+                {
+                    if (combat.IsDead) { Call(combat, "Respawn"); Teleport(front, e.transform.position); }
+                    if (armL != null) maxArm = Mathf.Max(maxArm, Quaternion.Angle(l0, armL.localRotation), Quaternion.Angle(r0, armR.localRotation));
+                    if (!swingShot && e.Status == "АТАКУЕТ") { swingShot = true; yield return Shot("09_strike_" + e.id); }
+                    if (swingShot && maxArm > 40f) break;
+                    waited2 += Time.unscaledDeltaTime; yield return null;
+                }
+                Check(swingShot, e.displayName + " attacks");
+                Check(maxArm > 40f, e.displayName + " swings its arms in the attack (" + maxArm.ToString("0") + "°)");
             }
 
             // ── death and respawn
@@ -245,7 +284,42 @@ namespace Goblingame.TestScene.Dev
                 yield return Shot("08_bestiary");
                 hud.bestiary.SetActive(false);
             }
+            yield return PoseGallery(enemies);
             Finish();
+        }
+
+        /// <summary>Close-up 3/4 shots of every enemy clip at key phases (for visual review).</summary>
+        private IEnumerator PoseGallery(List<EnemyActor> enemies)
+        {
+            view.enabled = false;
+            if (hud != null) hud.gameObject.SetActive(false);
+            combat.gameObject.SetActive(false);
+            foreach (var e in enemies) { e.enabled = false; var bar = e.transform.Find("Health"); if (bar != null) bar.gameObject.SetActive(false); var al = e.transform.Find("Alert"); if (al != null) al.gameObject.SetActive(false); }
+            Vector3 stage = combat.transform.position + Vector3.back * 12f;
+            foreach (var e in enemies)
+            {
+                var others = new List<EnemyActor>(enemies); others.Remove(e);
+                foreach (var o in others) o.gameObject.SetActive(false);
+                var cc = e.GetComponent<CharacterController>(); cc.enabled = false;
+                e.transform.SetPositionAndRotation(stage, Quaternion.identity);
+                var anim = e.visual.GetComponent<Animator>(); if (anim != null) anim.enabled = false;
+                e.visual.localScale = (Vector3)Get(e, "restScale"); e.visual.localRotation = (Quaternion)Get(e, "restRotation"); e.visual.localPosition = (Vector3)Get(e, "restPosition");
+                var clips = anim != null && anim.runtimeAnimatorController != null ? anim.runtimeAnimatorController.animationClips : new AnimationClip[0];
+                float h = e.GetComponent<CharacterController>().height;
+                var cam = Camera.main.transform;
+                cam.position = stage + new Vector3(h * 1.25f, h * .75f, h * 1.6f); cam.LookAt(stage + Vector3.up * h * .55f);
+                foreach (var (clipName, frac, label) in new[] { ("Idle", 0f, "idle"), ("Walk", .25f, "walk"), ("Attack", -1f, "windup"), ("Attack", -2f, "strike"), ("Hit", .2f, "hit"), ("Death", 1f, "death") })
+                {
+                    var clip = System.Array.Find(clips, c => c.name.EndsWith("_" + clipName));
+                    if (clip == null) continue;
+                    float t = frac >= 0 ? frac * clip.length : frac == -1f ? e.windup * clip.length / (e.windup + e.strikeTime + e.recover)
+                                                                : (e.windup + e.strikeTime * .5f) * clip.length / (e.windup + e.strikeTime + e.recover);
+                    clip.SampleAnimation(e.visual.gameObject, Mathf.Min(t, clip.length - .001f));
+                    yield return Shot("10_" + e.id + "_" + label);
+                }
+                foreach (var o in others) o.gameObject.SetActive(true);
+                e.gameObject.SetActive(false);
+            }
         }
 
         private void Finish()

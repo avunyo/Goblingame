@@ -29,14 +29,15 @@ namespace Goblingame.TestScene.Editor
         private struct Archetype
         {
             public string id, name; public float scale, windup, strike, recover, range, lunge, poise, cooldown, alert, leash, speed, damage;
+            public EnemyRigBuilder.AttackStyle style; public float cycle, heavy;
         }
         private static readonly Archetype[] Cast =
         {
             // scale = height relative to the goblin
-            new Archetype{id="RatRogue",    name="Крысолов",       scale=.95f,windup=.45f,strike=.22f,recover=.70f,range=1.20f,lunge=1.3f,poise=18f,cooldown=.7f,alert=7f,leash=16f,speed=1.6f,damage=10f},
-            new Archetype{id="MossGourmand",name="Грибоед",        scale=1.15f,windup=1.0f,strike=.35f,recover=1.3f,range=1.50f,lunge=.5f, poise=60f,cooldown=1.6f,alert=5f,leash=14f,speed=.75f,damage=20f},
-            new Archetype{id="BoneSentinel",name="Костяной страж", scale=1.05f,windup=.70f,strike=.28f,recover=1.0f,range=1.45f,lunge=.8f, poise=40f,cooldown=1.1f,alert=6f,leash=16f,speed=1.05f,damage=16f},
-            new Archetype{id="IronTusk",    name="Железный клык",  scale=1.5f,windup=1.15f,strike=.38f,recover=1.4f,range=1.90f,lunge=1.0f,poise=90f,cooldown=1.4f,alert=8f,leash=18f,speed=1.15f,damage=30f},
+            new Archetype{id="RatRogue",    name="Крысолов",       scale=.95f,windup=.45f,strike=.22f,recover=.70f,range=1.20f,lunge=1.3f,poise=18f,cooldown=.7f,alert=7f,leash=16f,speed=1.6f,damage=10f,style=EnemyRigBuilder.AttackStyle.Stab,cycle=.62f,heavy=0f},
+            new Archetype{id="MossGourmand",name="Грибоед",        scale=1.15f,windup=1.0f,strike=.35f,recover=1.3f,range=1.50f,lunge=.5f, poise=60f,cooldown=1.6f,alert=5f,leash=14f,speed=.75f,damage=20f,style=EnemyRigBuilder.AttackStyle.Slam,cycle=1.1f,heavy=.8f},
+            new Archetype{id="BoneSentinel",name="Костяной страж", scale=1.05f,windup=.70f,strike=.28f,recover=1.0f,range=1.45f,lunge=.8f, poise=40f,cooldown=1.1f,alert=6f,leash=16f,speed=1.05f,damage=16f,style=EnemyRigBuilder.AttackStyle.Slash,cycle=.85f,heavy=.3f},
+            new Archetype{id="IronTusk",    name="Железный клык",  scale=1.5f,windup=1.15f,strike=.38f,recover=1.4f,range=1.90f,lunge=1.0f,poise=90f,cooldown=1.4f,alert=8f,leash=18f,speed=1.15f,damage=30f,style=EnemyRigBuilder.AttackStyle.Smash,cycle=1.0f,heavy=1f},
         };
 
         static GoblinGameUpgrade()
@@ -92,12 +93,16 @@ namespace Goblingame.TestScene.Editor
         {
             var controller = AssetDatabase.LoadAssetAtPath<AnimatorController>(GoblinController);
             if (controller == null) { Debug.LogWarning("[GoblinUpgrade] Goblin controller not found: " + GoblinController); return; }
-            foreach (string p in new[] { "IdleTime", "BlockTime" })
+            foreach (string p in new[] { "IdleTime", "BlockTime", "MoveSpeed" })
                 if (!controller.parameters.Any(x => x.name == p)) controller.AddParameter(p, AnimatorControllerParameterType.Float);
+            var ps = controller.parameters;
+            foreach (var p in ps) if (p.name == "MoveSpeed") p.defaultFloat = 1f;
+            controller.parameters = ps;
             foreach (var child in controller.layers[0].stateMachine.states)
             {
                 var s = child.state;
                 string param = s.name == "Idle" || s.name == "CombatReady" || s.name == "CombatIdle" ? "IdleTime" : s.name == "Block" ? "BlockTime" : null;
+                if (s.name == "Walk" || s.name == "Run") { s.speedParameter = "MoveSpeed"; s.speedParameterActive = true; EditorUtility.SetDirty(s); }
                 if (param == null) continue;
                 s.timeParameter = param; s.timeParameterActive = true;
                 EditorUtility.SetDirty(s);
@@ -145,7 +150,6 @@ namespace Goblingame.TestScene.Editor
             string path = EnemyModels + a.id + ".fbx";
             var model = PrepareModel(path);
             if (model == null) { Debug.LogWarning("[GoblinUpgrade] Model missing: " + path); return false; }
-            bool animated = AssetDatabase.LoadAllAssetsAtPath(path).OfType<AnimationClip>().Any(c => !c.name.StartsWith("__"));
 
             var root = actor.transform;
             var old = actor.visual != null && actor.visual != root ? actor.visual.gameObject : null;
@@ -173,21 +177,23 @@ namespace Goblingame.TestScene.Editor
                 visual.transform.localScale = Vector3.one * (want / Mathf.Max(raw.size.y, 1e-4f));
                 Debug.Log("[GoblinUpgrade] " + a.id + ": raw height " + raw.size.y.ToString("0.###") + " → " + want.ToString("0.00") + " m");
             }
-            if (animated)
-            {
-                // Unity's fake-null: never use ?? with components.
-                var animator = visual.GetComponent<Animator>();
-                if (animator == null) animator = visual.AddComponent<Animator>();
-                animator.runtimeAnimatorController = PrepareController(a.id, path);
-                animator.applyRootMotion = false;
-            }
-            // static models (no rig) are animated procedurally by EnemyActor
 
             var renderers = visual.GetComponentsInChildren<Renderer>();
             Bounds b = renderers[0].bounds; foreach (var r in renderers) b.Encapsulate(r.bounds);
             // stand on the ground and centre the body over the controller
             visual.transform.position += new Vector3(root.position.x - b.center.x, root.position.y - b.min.y, root.position.z - b.center.z);
             float height = b.size.y;
+
+            // puppet rig + keyframed clips (the FBX parts are rigid pieces)
+            if (PrefabUtility.IsPartOfPrefabInstance(visual)) PrefabUtility.UnpackPrefabInstance(visual, PrefabUnpackMode.OutermostRoot, InteractionMode.AutomatedAction);
+            var controller = EnemyRigBuilder.Build(visual.transform, root, new EnemyRigBuilder.Spec
+            {
+                id = a.id, style = a.style, windup = a.windup, strike = a.strike, recover = a.recover, walkCycle = a.cycle, heaviness = a.heavy
+            }, "Assets/EnemyCast/Animations/" + a.id);
+            var animator = visual.GetComponent<Animator>();
+            if (animator == null) animator = visual.AddComponent<Animator>();
+            animator.avatar = null; animator.runtimeAnimatorController = controller; animator.applyRootMotion = false;
+            animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
 
             var cc = root.GetComponent<CharacterController>();
             Undo.RecordObject(cc, "Enemy collider");

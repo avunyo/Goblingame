@@ -25,6 +25,12 @@ namespace Goblingame.TestScene
         private Vector3 externalVelocity;
         public bool IsMoving { get; private set; }
         public bool IsRunning { get; private set; }
+        /// <summary>Current planar speed (m/s) and its ratio to the nominal walk/run speed.</summary>
+        public float CurrentSpeed => horizontalSpeed;
+        public float SpeedRatio => horizontalSpeed / Mathf.Max(0.1f, IsRunning ? runSpeed : moveSpeed);
+        /// <summary>Signed yaw rate in degrees per second (positive = turning right).</summary>
+        public float TurnRate { get; private set; }
+        private float lastYaw;
 
         /// <summary>Short burst of motion (attack lunge, knockback). Decays quickly.</summary>
         public void Push(Vector3 velocity) { velocity.y = 0f; externalVelocity = velocity; }
@@ -140,6 +146,9 @@ namespace Goblingame.TestScene
             controller.Move((direction * horizontalSpeed + push + Vector3.up * verticalSpeed) * Time.deltaTime);
             Vector3 displacement = transform.position - before;
             displacement.y = 0f;
+            float yaw = transform.eulerAngles.y;
+            if (Time.deltaTime > 0f) TurnRate = Mathf.DeltaAngle(lastYaw, yaw) / Time.deltaTime;
+            lastYaw = yaw;
             IsMoving = input.sqrMagnitude > 0f && displacement.sqrMagnitude > 0.00000001f;
             IsRunning = running && IsMoving;
             if (animator != null)

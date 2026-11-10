@@ -61,6 +61,9 @@ namespace Goblingame.TestScene
 
         private static readonly int IdleTimeParam = Animator.StringToHash("IdleTime");
         private static readonly int BlockTimeParam = Animator.StringToHash("BlockTime");
+        private static readonly int MoveSpeedParam = Animator.StringToHash("MoveSpeed");
+        private bool hasMoveSpeed;
+        private float bank, pitchLean;
 
         private GoblinMovement movement;
         private ThirdPersonFollow view;
@@ -112,6 +115,7 @@ namespace Goblingame.TestScene
             {
                 if (p.nameHash == IdleTimeParam) hasIdleTime = true;
                 if (p.nameHash == BlockTimeParam) hasBlockTime = true;
+                if (p.nameHash == MoveSpeedParam) hasMoveSpeed = true;
             }
             foreach (var clip in animator.runtimeAnimatorController.animationClips)
             {
@@ -135,6 +139,9 @@ namespace Goblingame.TestScene
             bool focused = Application.isFocused;
             InCombat = Time.time - lastCombatTime < 5f || EnemyNearby(8f);
             HasFacing = false;
+            // feet follow the body: playback speed tracks the real speed while accelerating / stopping
+            if (hasMoveSpeed && movement != null)
+                animator.SetFloat(MoveSpeedParam, Mathf.Clamp(movement.SpeedRatio, 0.55f, 1.2f));
 
             if (IsDead)
             {
@@ -167,7 +174,7 @@ namespace Goblingame.TestScene
                 {
                     if (queuedHeadbutt) { StartHeadbutt(); return; }
                     if (queuedPunch && move.state == "Punch" && comboIndex < Combo.Length - 1) { NextPunch(); return; }
-                    EndAttack(0.22f);
+                    EndAttack(0.3f);
                 }
                 if (attacking) return;
             }
@@ -188,11 +195,13 @@ namespace Goblingame.TestScene
             if (movement != null && movement.IsMoving)
             {
                 gestureClock = -1f; ScheduleGesture();
-                ChangeState(movement.IsRunning ? "Run" : "Walk", 0.2f);
+                // idle → walk is quick (responsive), walk ↔ run blends a little longer
+                bool fromLocomotion = currentState == "Walk" || currentState == "Run";
+                ChangeState(movement.IsRunning ? "Run" : "Walk", fromLocomotion ? 0.3f : 0.18f);
             }
             else
             {
-                ChangeState("Idle", 0.25f);
+                ChangeState("Idle", currentState == "Run" ? 0.35f : 0.28f);
                 if (view != null && view.IsLocked) { HasFacing = true; FacingDirection = Flat(view.LockTarget.transform.position - transform.position); }
                 DriveIdle(dt);
             }
@@ -427,6 +436,17 @@ namespace Goblingame.TestScene
             // plus a short procedural flinch when the goblin is hit.
             animator.transform.localPosition = baseModelPosition;
             animator.transform.localRotation = baseModelRotation;
+            // body language: bank into turns, lean forward with speed, settle back when stopping
+            if (movement != null && !IsDead)
+            {
+                float dt = Time.deltaTime, k = 1f - Mathf.Exp(-8f * dt);
+                float speed = movement.CurrentSpeed;
+                float wantBank = Mathf.Clamp(-movement.TurnRate * 0.025f * Mathf.Clamp01(speed / 3f), -12f, 12f);
+                float wantPitch = attacking || blocking ? 0f : Mathf.Clamp(speed * 1.3f, 0f, 8f);
+                bank = Mathf.Lerp(bank, wantBank, k); pitchLean = Mathf.Lerp(pitchLean, wantPitch, k);
+                animator.transform.rotation = Quaternion.AngleAxis(pitchLean, transform.right) *
+                                              Quaternion.AngleAxis(bank, transform.forward) * animator.transform.rotation;
+            }
             if (flinch > 0f)
             {
                 float angle = Mathf.Sin(flinch * Mathf.PI) * 11f;

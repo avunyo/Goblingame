@@ -65,7 +65,7 @@ namespace Goblingame.TestScene
             home=transform.position;destination=home+transform.right*1.5f;timer=Random.Range(.5f,2f);circleSign=Random.value<.5f?-1f:1f;
             restRotation=visual.localRotation;restPosition=visual.localPosition;restScale=visual.localScale;
             health.Died+=OnDeath;health.Hit+=OnHit;
-            if(animator!=null&&animator.runtimeAnimatorController!=null){animator.applyRootMotion=false;animator.Play("Idle",0,Random.value);}
+            if(animator!=null&&animator.runtimeAnimatorController!=null){animator.applyRootMotion=false;animator.Play("Idle",0,Random.value);clipState="Idle";}
             BuildAlert();
             if(transform.Find("Health")==null)BuildHealthBar();
         }
@@ -114,9 +114,14 @@ namespace Goblingame.TestScene
                 knock=away.normalized*hit.knockback*5f;
                 Stagger(hit.stagger+.15f);poiseDamage=0f;
             }
-            else knock=away.normalized*hit.knockback*1.5f;
+            else
+            {
+                knock=away.normalized*hit.knockback*1.5f;
+                // light flinch while moving around (never interrupts an attack)
+                if(state==State.Chase||state==State.Circle||state==State.Patrol||state==State.Return){flinchUntil=Time.time+.3f;if(clipState=="Hit")clipState=null;}
+            }
         }
-        private void Stagger(float seconds){ReleaseToken();state=State.Stagger;timer=seconds;}
+        private void Stagger(float seconds){ReleaseToken();state=State.Stagger;timer=seconds;staggerStart=Time.time;if(clipState=="Hit"||clipState=="Stagger")clipState=null;}
         private void Engage(){if(state==State.Patrol||state==State.Return){state=State.Chase;alertPop=1f;}}
         private void ReleaseToken(){if(token==this)token=null;}
 
@@ -131,7 +136,7 @@ namespace Goblingame.TestScene
             if(health==null||player==null)return;
             float dt=Time.deltaTime;
             flash=Mathf.MoveTowards(flash,0f,dt*4f);alertPop=Mathf.MoveTowards(alertPop,0f,dt*1.5f);
-            if(state==State.Dead){UpdateDead(dt);Pose(dt);return;}
+            if(state==State.Dead){UpdateDead(dt);Pose(dt);Animate();return;}
             cooldown-=dt;
             Vector3 toPlayer=player.transform.position-transform.position;toPlayer.y=0;
             float dist=toPlayer.magnitude;
@@ -223,7 +228,7 @@ namespace Goblingame.TestScene
             Vector3 travel=Flat(transform.position-before);
             float moved=dt>0?travel.magnitude/dt:0f;
             SetWalking(moved>.15f&&move.sqrMagnitude>0f,moved/Mathf.Max(.1f,walkSpeed));
-            Pose(dt);
+            Pose(dt);Animate();
         }
 
         private bool TryAttack()
@@ -239,20 +244,21 @@ namespace Goblingame.TestScene
             if(timer<=0f)
             {
                 transform.position=home;visual.localRotation=restRotation;visual.localPosition=restPosition;visual.localScale=restScale;
-                health.RestoreHealth();controller.enabled=true;state=State.Patrol;timer=2f;lean=0f;poiseDamage=0f;
+                health.RestoreHealth();controller.enabled=true;state=State.Patrol;timer=2f;lean=0f;poiseDamage=0f;clipState=null;
             }
         }
 
         private void Pose(float dt)
         {
             float targetLean=0f,sink=0f;
-            switch(state)
+            if(state==State.Dead)sink=Mathf.Clamp01((respawnDelay-timer-3f)/2f)*.8f;
+            if(!Animated)switch(state)   // keyframed rigs pose themselves; this is the fallback for static models
             {
                 case State.Windup:targetLean=-14f*Mathf.SmoothStep(0,1,1f-timer/windup);break;
                 case State.Strike:targetLean=22f;break;
                 case State.Recover:targetLean=8f*Mathf.Clamp01(timer/recover);break;
                 case State.Stagger:targetLean=-18f;break;
-                case State.Dead:targetLean=-80f;sink=Mathf.Clamp01((respawnDelay-timer-3f)/2f)*.8f;break;
+                case State.Dead:targetLean=-80f;break;
             }
             float k=state==State.Strike?1f-Mathf.Exp(-30f*dt):1f-Mathf.Exp(-10f*dt);
             lean=Mathf.Lerp(lean,targetLean,k);
@@ -294,9 +300,29 @@ namespace Goblingame.TestScene
         private void SetWalking(bool value,float rate)
         {
             stride=Mathf.MoveTowards(stride,value?1f:0f,Time.deltaTime*5f);walkRate=rate;
+            walking=value;
+        }
+
+        // ───────────── keyframed animation (rigged enemies) ─────────────
+        private string clipState;private float attackClipLength=-1f,staggerStart,flinchUntil;
+        private void Animate()
+        {
             if(!Animated)return;
-            animator.speed=value?Mathf.Clamp(rate,.7f,2.2f):1f;
-            if(walking==value)return;walking=value;animator.CrossFadeInFixedTime(value?"Walk":"Idle",.2f);
+            if(attackClipLength<0f){attackClipLength=0f;foreach(var c in animator.runtimeAnimatorController.animationClips)if(c.name.EndsWith("_Attack"))attackClipLength=c.length;}
+            string want;float blend=.2f;
+            switch(state)
+            {
+                case State.Windup:case State.Strike:case State.Recover:want="Attack";blend=.08f;break;
+                case State.Stagger:want=Time.time-staggerStart<.4f?"Hit":"Stagger";blend=want=="Hit"?.05f:.25f;break;
+                case State.Dead:want="Death";blend=.1f;break;
+                default:want=Time.time<flinchUntil?"Hit":walking?"Walk":"Idle";blend=want=="Hit"?.05f:.2f;break;
+            }
+            if(want=="Walk")animator.speed=Mathf.Clamp(walkRate,.6f,2.2f);
+            else if(want=="Attack"&&attackClipLength>0f)animator.speed=attackClipLength/Mathf.Max(.1f,windup+strikeTime+recover);
+            else animator.speed=1f;
+            if(want==clipState)return;
+            animator.CrossFadeInFixedTime(want,blend,0,0f);
+            clipState=want;
         }
         private static Vector3 Flat(Vector3 v){v.y=0;return v;}
     }
