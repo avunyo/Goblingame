@@ -1,0 +1,260 @@
+#if UNITY_EDITOR
+using System.Collections;
+using System.Collections.Generic;
+using System.IO;
+using System.Reflection;
+using System.Text;
+using UnityEngine;
+
+namespace Goblingame.TestScene.Dev
+{
+    /// <summary>
+    /// Automated play-mode check (editor only). Started by Goblingame > Run Playtest.
+    /// Drives the goblin through idle, lock-on, punch combo, enemy attack, block/parry,
+    /// headbutt, kills, death/respawn and the bestiary; collects console errors and
+    /// screenshots into Temp/Playtest, writes Temp/Playtest/report.txt, then exits Play.
+    /// </summary>
+    public sealed class GoblinPlaytest : MonoBehaviour
+    {
+        private static string Root => Directory.GetParent(Application.dataPath).FullName;
+        private static string Flag => Path.Combine(Root, "Temp/GoblinPlaytest.run");
+        private static string OutDir => Path.Combine(Root, "Temp/Playtest");
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+        private static void Boot()
+        {
+            if (!File.Exists(Flag)) return;
+            File.Delete(Flag);
+            new GameObject("Goblin Playtest").AddComponent<GoblinPlaytest>();
+        }
+
+        private readonly StringBuilder report = new StringBuilder();
+        private readonly List<string> errors = new List<string>();
+        private int pass, fail;
+        private GoblinCombat combat; private ThirdPersonFollow view; private CombatHUD hud; private Animator anim;
+
+        private void Awake()
+        {
+            Application.logMessageReceived += OnLog;
+            if (Directory.Exists(OutDir)) foreach (var f in Directory.GetFiles(OutDir)) File.Delete(f);
+            Directory.CreateDirectory(OutDir);
+        }
+        private void OnDestroy() { Application.logMessageReceived -= OnLog; }
+        private void OnLog(string message, string stack, LogType type)
+        {
+            if (type == LogType.Error || type == LogType.Exception || type == LogType.Assert)
+                errors.Add(type + ": " + message + "\n" + stack);
+        }
+
+        private void Check(bool ok, string what) { if (ok) pass++; else fail++; Line((ok ? "PASS " : "FAIL ") + what); }
+        private void Line(string s) { report.AppendLine(s); Debug.Log("[Playtest] " + s); }
+
+        private static object Get(object o, string field) =>
+            o.GetType().GetField(field, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)?.GetValue(o);
+        private static void Set(object o, string field, object value) =>
+            o.GetType().GetField(field, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)?.SetValue(o, value);
+        private static object Call(object o, string method, params object[] args) =>
+            o.GetType().GetMethod(method, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)?.Invoke(o, args);
+
+        /// <summary>Share of pixels that differ from the background (corner) colour — i.e. how much of the subject is in frame.</summary>
+        private static float Brightness(Texture2D t)
+        {
+            var px = t.GetPixels(); Color bg = px[0]; int hit = 0;
+            foreach (var c in px) if (Mathf.Abs(c.r - bg.r) + Mathf.Abs(c.g - bg.g) + Mathf.Abs(c.b - bg.b) > 0.08f) hit++;
+            return hit / (float)px.Length;
+        }
+
+        private IEnumerator Shot(string name)
+        {
+            yield return new WaitForEndOfFrame();
+            ScreenCapture.CaptureScreenshot(Path.Combine(OutDir, name + ".png"));
+            yield return null; yield return null;
+        }
+
+        private void Teleport(Vector3 position, Vector3 lookAt)
+        {
+            var cc = combat.GetComponent<CharacterController>();
+            cc.enabled = false;
+            Vector3 dir = lookAt - position; dir.y = 0;
+            combat.transform.SetPositionAndRotation(position, Quaternion.LookRotation(dir));
+            cc.enabled = true;
+        }
+
+        private IEnumerator Start()
+        {
+            yield return new WaitForSecondsRealtime(1.5f);
+            combat = FindFirstObjectByType<GoblinCombat>();
+            view = Camera.main != null ? Camera.main.GetComponent<ThirdPersonFollow>() : null;
+            hud = FindFirstObjectByType<CombatHUD>();
+            Check(combat != null, "Player GoblinCombat present");
+            Check(view != null, "Camera ThirdPersonFollow present");
+            Check(hud != null, "CombatHUD present");
+            if (combat == null || view == null) { Finish(); yield break; }
+            anim = (Animator)Get(combat, "animator");
+            Check((bool)Get(combat, "ready"), "Combat ready (Punch state found)");
+            Check((bool)Get(combat, "hasIdleTime"), "Animator has IdleTime parameter");
+            Check((bool)Get(combat, "hasBlockTime"), "Animator has BlockTime parameter");
+            var enemies = new List<EnemyActor>(EnemyActor.All);
+            Check(enemies.Count == 4, "Four enemies registered (" + enemies.Count + ")");
+            foreach (var e in enemies)
+            {
+                var rs = e.visual != null ? e.visual.GetComponentsInChildren<Renderer>() : new Renderer[0];
+                bool model = e.visual != null && e.visual.name == "Visual" && rs.Length > 3;
+                Bounds b = rs.Length > 0 ? rs[0].bounds : new Bounds();
+                foreach (var r in rs) b.Encapsulate(r.bounds);
+                Check(model, e.displayName + " uses a real model (" + rs.Length + " parts)");
+                Check(b.size.y > 1.2f && b.size.y < 4.5f, e.displayName + " is a sensible size (" + b.size.y.ToString("0.00") + " m)");
+                Check(b.size.y >= 0.75f * Mathf.Max(b.size.x, b.size.z), e.displayName + " stands upright (h " + b.size.y.ToString("0.00") + " vs w " + Mathf.Max(b.size.x, b.size.z).ToString("0.00") + ")");
+                Check(Mathf.Abs(b.min.y - e.transform.position.y) < 0.3f, e.displayName + " stands on the ground (feet at " + (b.min.y - e.transform.position.y).ToString("0.00") + ")");
+                var bar = e.transform.Find("Health");
+                Check(bar != null && bar.gameObject.activeInHierarchy && bar.GetComponent<Canvas>().enabled && bar.position.y > b.max.y,
+                    e.displayName + " health bar above head (" + (bar != null ? bar.position.y.ToString("0.00") : "none") + " vs head " + b.max.y.ToString("0.00") + ")");
+            }
+            if (hud != null && hud.targetPortrait != null)
+            {
+                var goblinPic = hud.transform.Find("Goblin Status/Portrait Frame/Portrait");
+                var tex = goblinPic != null ? goblinPic.GetComponent<UnityEngine.UI.RawImage>().texture as Texture2D : null;
+                Check(tex != null && Brightness(tex) > 0.12f, "Goblin portrait rendered (brightness " + (tex != null ? Brightness(tex).ToString("0.00") : "none") + ")");
+                foreach (var e in enemies)
+                {
+                    var card = hud.bestiary != null ? hud.bestiary.transform.Find(e.id + " Card/Portrait") : null;
+                    var ct = card != null ? card.GetComponent<UnityEngine.UI.RawImage>().texture as Texture2D : null;
+                    Check(ct != null && Brightness(ct) > 0.12f, e.displayName + " bestiary card rendered (" + (ct != null ? Brightness(ct).ToString("0.00") : "none") + ")");
+                }
+            }
+            Vector3 spawn = combat.transform.position;
+            yield return Shot("01_start");
+
+            // ── idle: calm, gesture only when scheduled (away from enemies)
+            Teleport(spawn + Vector3.back * 9f, spawn + Vector3.back * 20f);
+            yield return new WaitForSecondsRealtime(0.5f);
+            Line("info: InCombat at quiet spot = " + combat.InCombat);
+            float maxIdle = 0f;
+            for (float t = 0; t < 2.5f; t += Time.unscaledDeltaTime) { maxIdle = Mathf.Max(maxIdle, anim.GetFloat("IdleTime")); yield return null; }
+            Check(maxIdle < 0.12f, "Calm idle stays in the quiet part of the clip (max " + maxIdle.ToString("0.00") + ")");
+            // enemies that already spotted the goblin may follow it here; test the timer itself
+            Set(combat, "gestureInCombat", true);
+            Set(combat, "nextGesture", Time.time);
+            float gesture = 0f;
+            for (float t = 0; t < 3.5f; t += Time.unscaledDeltaTime) { gesture = Mathf.Max(gesture, anim.GetFloat("IdleTime")); yield return null; }
+            Set(combat, "gestureInCombat", false);
+            Check(gesture > 0.5f, "Scheduled gesture plays through (reached " + gesture.ToString("0.00") + ")");
+            float next = (float)Get(combat, "nextGesture") - Time.time;
+            Check(next > 5f, "Next gesture rescheduled " + next.ToString("0.0") + " s later");
+
+            // ── lock-on
+            EnemyActor rat = enemies.Find(e => e.id == "RatRogue") ?? enemies[0];
+            Vector3 toRat = rat.transform.position - spawn; toRat.y = 0;
+            Teleport(rat.transform.position - toRat.normalized * 3.0f, rat.transform.position);
+            yield return new WaitForSecondsRealtime(1.2f);
+            Check(rat.IsEngaged, rat.displayName + " engages the goblin");
+            Check(view.IsLocked && view.LockTarget == rat, "Camera auto-focuses " + rat.displayName + " (locked=" + (view.LockTarget != null ? view.LockTarget.displayName : "none") + ")");
+            Check(combat.InCombat, "Goblin enters combat automatically");
+            yield return Shot("02_lock_on");
+
+            // ── punch combo (start it while the rat is not mid-attack, and keep it from attacking)
+            for (float t = 0; t < 4f && (rat.IsTelegraphing || rat.Status == "АТАКУЕТ"); t += Time.unscaledDeltaTime) yield return null;
+            // duel spot away from the training dummy and other enemies
+            Vector3 duel = spawn + Vector3.back * 6f;
+            Set(rat, "home", duel);
+            var ratCC = rat.GetComponent<CharacterController>(); ratCC.enabled = false; rat.transform.position = duel; ratCC.enabled = true;
+            Set(rat, "cooldown", 6f);
+            Teleport(duel + Vector3.back * 1.6f, duel);
+            yield return new WaitForSecondsRealtime(0.3f);
+            float hp0 = rat.Health.Health;
+            float playerBefore = combat.Health;
+            Set(combat, "comboIndex", -1); Call(combat, "NextPunch");
+            float stuck = 0f; bool shot = false;
+            for (float t = 0; t < 3.5f; t += Time.unscaledDeltaTime)
+            {
+                if (t < 2.0f) Set(combat, "queuedPunch", true);
+                if (!shot && t > 0.8f) { shot = true; yield return Shot("03_combo"); }
+                if (combat.IsAttacking) stuck = t;
+                yield return null;
+            }
+            float dealt = hp0 - rat.Health.Health;
+            Check(dealt >= 40f, "4-hit combo damages the rat (" + dealt + " dmg, player took " + (playerBefore - combat.Health) + ")");
+            Check(!combat.IsAttacking, "Attack state ends (last attacking at " + stuck.ToString("0.00") + " s)");
+            Check(Time.timeScale == 1f, "Hit-stop restored time scale");
+
+            // ── enemy attacks the goblin
+            float php = combat.Health; bool telegraphShot = false; float waited = 0f;
+            while (combat.Health >= php && waited < 8f)
+            {
+                if (!telegraphShot && rat.IsTelegraphing && rat.TelegraphProgress > .5f) { telegraphShot = true; yield return Shot("04_telegraph"); }
+                waited += Time.unscaledDeltaTime; yield return null;
+            }
+            Check(telegraphShot, "Enemy telegraphs its attack");
+            Check(combat.Health < php, "Enemy hit lands on the goblin (" + (php - combat.Health) + " dmg after " + waited.ToString("0.0") + " s)");
+
+            // ── block / parry logic
+            Set(combat, "blocking", true); Set(combat, "blockStart", Time.time);
+            var parry = combat.TakeDamage(10f, combat.transform.position + combat.transform.forward);
+            Set(combat, "blockStart", Time.time - 1f);
+            float before = combat.Health;
+            var blocked = combat.TakeDamage(20f, combat.transform.position + combat.transform.forward);
+            Set(combat, "blocking", false);
+            Check(parry == HitResult.Parried, "Early block parries (" + parry + ")");
+            Check(blocked == HitResult.Blocked && before - combat.Health <= 3.01f, "Held block reduces damage (" + blocked + ", -" + (before - combat.Health) + ")");
+
+            // ── headbutt
+            yield return new WaitForSecondsRealtime(0.6f);
+            Teleport(rat.transform.position - (rat.transform.position - combat.transform.position).normalized * 1.5f, rat.transform.position);
+            float hb = rat.Health.Health;
+            Call(combat, "StartHeadbutt");
+            string statusAfter = "";
+            for (float t = 0; t < 1.2f; t += Time.unscaledDeltaTime) { if (hb - rat.Health.Health > 0 && statusAfter == "") statusAfter = rat.Status; yield return null; }
+            Check(hb - rat.Health.Health >= 20f || rat.Health.IsDead, "Headbutt damages (" + (hb - rat.Health.Health) + ")");
+            Check(statusAfter == "ОГЛУШЁН" || rat.Health.IsDead, "Headbutt staggers the rat (" + statusAfter + ")");
+
+            // ── kill → experience
+            var progression = combat.GetComponent<PlayerProgression>();
+            int xp0 = progression != null ? progression.Experience + progression.Level * 1000 : 0;
+            while (!rat.Health.IsDead) { rat.Health.TakeHit(new HitInfo { damage = 30, source = combat.transform.position }); yield return new WaitForSecondsRealtime(.15f); }
+            yield return new WaitForSecondsRealtime(1.2f);
+            Check(progression == null || progression.Experience + progression.Level * 1000 > xp0, "Kill grants experience");
+            Check(view.LockTarget != rat, "Camera releases the dead target");
+            yield return Shot("05_rat_down");
+
+            // ── look at every enemy model
+            foreach (var e in enemies)
+            {
+                if (e == rat) continue;
+                Vector3 front = e.transform.position + e.transform.forward * 4.5f;
+                Teleport(front, e.transform.position);
+                yield return new WaitForSecondsRealtime(1.3f);
+                yield return Shot("06_" + e.id);
+                Check(e.IsEngaged, e.displayName + " notices the goblin");
+            }
+
+            // ── death and respawn
+            combat.TakeDamage(9999f, combat.transform.position + combat.transform.forward);
+            yield return new WaitForSecondsRealtime(1.5f);
+            Check(combat.IsDead, "Goblin can die");
+            yield return Shot("07_dead");
+            Call(combat, "Respawn");
+            yield return new WaitForSecondsRealtime(1f);
+            Check(!combat.IsDead && combat.Health >= combat.MaxHealth - .1f, "Respawn restores health");
+            Check((combat.transform.position - spawn).magnitude < 0.5f, "Respawn returns to spawn point");
+
+            // ── bestiary
+            if (hud != null && hud.bestiary != null)
+            {
+                hud.bestiary.SetActive(true);
+                yield return new WaitForSecondsRealtime(.3f);
+                yield return Shot("08_bestiary");
+                hud.bestiary.SetActive(false);
+            }
+            Finish();
+        }
+
+        private void Finish()
+        {
+            Line("RESULT: " + pass + " passed, " + fail + " failed, " + errors.Count + " console errors");
+            foreach (var e in errors) report.AppendLine("ERROR " + e);
+            File.WriteAllText(Path.Combine(OutDir, "report.txt"), report.ToString());
+            UnityEditor.EditorApplication.ExitPlaymode();
+        }
+    }
+}
+#endif

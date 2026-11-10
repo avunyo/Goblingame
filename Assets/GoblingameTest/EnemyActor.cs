@@ -39,7 +39,7 @@ namespace Goblingame.TestScene
         private GoblinCombat player;
         private Vector3 home,destination,knock;
         private Quaternion restRotation;private Vector3 restPosition,restScale;
-        private float timer,cooldown,vertical,poiseDamage,flash,lean,circleSign=1f,alertPop;
+        private float timer,cooldown,vertical,poiseDamage,flash,lean,circleSign=1f,alertPop,gait,stride,walkRate=1f;
         private bool walking,struck;
         private TextMesh alert;
         private Camera view;
@@ -67,6 +67,28 @@ namespace Goblingame.TestScene
             health.Died+=OnDeath;health.Hit+=OnHit;
             if(animator!=null&&animator.runtimeAnimatorController!=null){animator.applyRootMotion=false;animator.Play("Idle",0,Random.value);}
             BuildAlert();
+            if(transform.Find("Health")==null)BuildHealthBar();
+        }
+
+        private static Sprite flat;
+        private void BuildHealthBar()
+        {
+            if(flat==null)flat=Sprite.Create(Texture2D.whiteTexture,new Rect(0,0,4,4),new Vector2(.5f,.5f),100f);
+            var go=new GameObject("Health",typeof(RectTransform),typeof(Canvas),typeof(EnemyHealthLabel));
+            go.transform.SetParent(transform,false);
+            go.transform.localPosition=Vector3.up*(controller.height+.3f);go.transform.localScale=Vector3.one*.006f;
+            go.GetComponent<Canvas>().renderMode=RenderMode.WorldSpace;
+            ((RectTransform)go.transform).sizeDelta=new Vector2(200,22);
+            Image("Rim",go.transform,new Vector2(204,26),elite?new Color(.85f,.65f,.25f):new Color(.39f,.32f,.24f));
+            Image("Back",go.transform,new Vector2(196,18),new Color(.06f,.06f,.06f,.95f));
+            var fill=Image("Fill",go.transform,new Vector2(192,14),new Color(.72f,.12f,.09f));
+            fill.type=UnityEngine.UI.Image.Type.Filled;fill.fillMethod=UnityEngine.UI.Image.FillMethod.Horizontal;
+            var label=go.GetComponent<EnemyHealthLabel>();label.target=health;label.fill=fill;
+        }
+        private static UnityEngine.UI.Image Image(string name,Transform parent,Vector2 size,Color color)
+        {
+            var rt=new GameObject(name,typeof(RectTransform)).GetComponent<RectTransform>();rt.SetParent(parent,false);rt.sizeDelta=size;
+            var img=rt.gameObject.AddComponent<UnityEngine.UI.Image>();img.sprite=flat;img.color=color;img.raycastTarget=false;return img;
         }
         private void OnDestroy(){if(health!=null){health.Died-=OnDeath;health.Hit-=OnHit;}}
 
@@ -100,7 +122,7 @@ namespace Goblingame.TestScene
 
         private void OnDeath()
         {
-            ReleaseToken();state=State.Dead;timer=respawnDelay;SetWalking(false,0f);
+            ReleaseToken();state=State.Dead;timer=respawnDelay;SetWalking(false,0f);stride=0f;
             var xp=player!=null?player.GetComponent<PlayerProgression>():null;if(xp!=null)xp.AddExperience(experienceReward);
         }
 
@@ -238,11 +260,21 @@ namespace Goblingame.TestScene
             Vector3 jitter=Vector3.zero;
             if(state==State.Windup)jitter=Random.insideUnitSphere*.025f*TelegraphProgress;
             jitter+=Random.insideUnitSphere*.05f*flash;
+            // procedural locomotion for static (unrigged) models: waddle + bob while walking, breathing at rest
+            float bob=0f,roll=0f,breathe=0f;
+            if(!Animated)
+            {
+                float moving=Mathf.Clamp01(stride);
+                gait+=dt*(2.5f+6f*moving*Mathf.Max(1f,walkRate));
+                bob=Mathf.Abs(Mathf.Sin(gait))*.07f*moving*controller.height/2.4f;
+                roll=Mathf.Sin(gait)*6f*moving;
+                breathe=state==State.Dead?0f:Mathf.Sin(Time.time*2.1f+home.x)*.018f*(1f-moving);
+            }
             visual.localRotation=restRotation;visual.localPosition=restPosition;
-            visual.rotation=Quaternion.AngleAxis(lean,transform.right)*visual.rotation;
-            visual.position+=jitter+Vector3.down*sink;
+            visual.rotation=Quaternion.AngleAxis(lean,transform.right)*Quaternion.AngleAxis(roll,transform.forward)*visual.rotation;
+            visual.position+=jitter+Vector3.down*sink+Vector3.up*bob;
             float squash=1f+.1f*flash;
-            visual.localScale=new Vector3(restScale.x*squash,restScale.y/squash,restScale.z*squash);
+            visual.localScale=new Vector3(restScale.x*squash,restScale.y/squash*(1f+breathe),restScale.z*squash);
         }
 
         private void LateUpdate()
@@ -258,9 +290,11 @@ namespace Goblingame.TestScene
         }
 
         private void Face(Vector3 direction,float degreesPerSecond){direction.y=0;if(direction.sqrMagnitude>.001f)transform.rotation=Quaternion.RotateTowards(transform.rotation,Quaternion.LookRotation(direction),degreesPerSecond*Time.deltaTime);}
+        private bool Animated=>animator!=null&&animator.runtimeAnimatorController!=null;
         private void SetWalking(bool value,float rate)
         {
-            if(animator==null||animator.runtimeAnimatorController==null)return;
+            stride=Mathf.MoveTowards(stride,value?1f:0f,Time.deltaTime*5f);walkRate=rate;
+            if(!Animated)return;
             animator.speed=value?Mathf.Clamp(rate,.7f,2.2f):1f;
             if(walking==value)return;walking=value;animator.CrossFadeInFixedTime(value?"Walk":"Idle",.2f);
         }

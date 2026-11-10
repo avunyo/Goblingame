@@ -32,10 +32,11 @@ namespace Goblingame.TestScene.Editor
         }
         private static readonly Archetype[] Cast =
         {
-            new Archetype{id="RatRogue",    name="Крысолов",       scale=.80f,windup=.45f,strike=.22f,recover=.70f,range=1.20f,lunge=1.3f,poise=18f,cooldown=.7f,alert=7f,leash=16f,speed=1.6f,damage=10f},
-            new Archetype{id="MossGourmand",name="Грибоед",        scale=.85f,windup=1.0f,strike=.35f,recover=1.3f,range=1.50f,lunge=.5f, poise=60f,cooldown=1.6f,alert=5f,leash=14f,speed=.75f,damage=20f},
-            new Archetype{id="BoneSentinel",name="Костяной страж", scale=.85f,windup=.70f,strike=.28f,recover=1.0f,range=1.45f,lunge=.8f, poise=40f,cooldown=1.1f,alert=6f,leash=16f,speed=1.05f,damage=16f},
-            new Archetype{id="IronTusk",    name="Железный клык",  scale=1.0f,windup=1.15f,strike=.38f,recover=1.4f,range=1.90f,lunge=1.0f,poise=90f,cooldown=1.4f,alert=8f,leash=18f,speed=1.15f,damage=30f},
+            // scale = height relative to the goblin
+            new Archetype{id="RatRogue",    name="Крысолов",       scale=.95f,windup=.45f,strike=.22f,recover=.70f,range=1.20f,lunge=1.3f,poise=18f,cooldown=.7f,alert=7f,leash=16f,speed=1.6f,damage=10f},
+            new Archetype{id="MossGourmand",name="Грибоед",        scale=1.15f,windup=1.0f,strike=.35f,recover=1.3f,range=1.50f,lunge=.5f, poise=60f,cooldown=1.6f,alert=5f,leash=14f,speed=.75f,damage=20f},
+            new Archetype{id="BoneSentinel",name="Костяной страж", scale=1.05f,windup=.70f,strike=.28f,recover=1.0f,range=1.45f,lunge=.8f, poise=40f,cooldown=1.1f,alert=6f,leash=16f,speed=1.05f,damage=16f},
+            new Archetype{id="IronTusk",    name="Железный клык",  scale=1.5f,windup=1.15f,strike=.38f,recover=1.4f,range=1.90f,lunge=1.0f,poise=90f,cooldown=1.4f,alert=8f,leash=18f,speed=1.15f,damage=30f},
         };
 
         static GoblinGameUpgrade()
@@ -52,9 +53,19 @@ namespace Goblingame.TestScene.Editor
             { EditorApplication.delayCall += () => RunQueued(request); return; }
             var scene = SceneManager.GetActiveScene();
             if (scene.path != ScenePath) { Debug.LogWarning("[GoblinUpgrade] Open " + ScenePath + " and choose Goblingame > Upgrade Camera, Combat and Enemies."); File.Delete(request); return; }
-            if (scene.isDirty) { Debug.LogWarning("[GoblinUpgrade] Scene has unsaved changes — save it, then choose Goblingame > Upgrade Camera, Combat and Enemies."); File.Delete(request); return; }
+            string command = File.ReadAllText(request).Trim();
             File.Delete(request);
-            try { Apply(); } catch (Exception e) { Debug.LogException(e); }
+            if (scene.isDirty)
+            {
+                if (command != "retry") { Debug.LogWarning("[GoblinUpgrade] Scene has unsaved changes — save it, then choose Goblingame > Upgrade Camera, Combat and Enemies."); return; }
+                // A previous upgrade attempt failed half-way. Keep a copy of the in-memory scene, then reload the saved one.
+                string copy = AssetDatabase.GenerateUniqueAssetPath("Assets/Scenes/GoblinUnsavedBeforeRetry.unity");
+                EditorSceneManager.SaveScene(scene, copy, true);
+                EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
+                Debug.Log("[GoblinUpgrade] Unsaved scene state copied to " + copy + "; reloaded " + ScenePath + " from disk.");
+            }
+            try { Apply(); } catch (Exception e) { Debug.LogException(e); return; }
+            GoblinPlaytestLauncher.StartIfRequested();
         }
 
         [MenuItem("Goblingame/Upgrade Camera, Combat and Enemies")]
@@ -110,36 +121,68 @@ namespace Goblingame.TestScene.Editor
                 actor.attackRange = a.range; actor.lunge = a.lunge; actor.poise = a.poise; actor.attackCooldown = a.cooldown;
                 actor.alertRadius = a.alert; actor.leash = a.leash; actor.walkSpeed = a.speed; actor.hitDamage = a.damage;
 
-                bool hasModel = actor.visual != null && actor.visual.GetComponentInChildren<SkinnedMeshRenderer>() != null;
-                if (!hasModel && InstallModel(actor, a)) count++;
+                // always (re)install: the step is idempotent and re-fits size/orientation
+                if (InstallModel(actor, a, GoblinHeight(scene))) count++;
                 EditorUtility.SetDirty(actor);
             }
             return count;
         }
 
-        private static bool InstallModel(EnemyActor actor, Archetype a)
+        private static float GoblinHeight(Scene scene)
+        {
+            var player = scene.GetRootGameObjects().FirstOrDefault(o => o.name == "Player");
+            var cc = player != null ? player.GetComponent<CharacterController>() : null;
+            if (player != null)
+            {
+                var rs = player.GetComponentsInChildren<Renderer>();
+                if (rs.Length > 0) { Bounds b = rs[0].bounds; foreach (var r in rs) b.Encapsulate(r.bounds); if (b.size.y > .5f) return b.size.y; }
+            }
+            return cc != null ? cc.height : 2f;
+        }
+
+        private static bool InstallModel(EnemyActor actor, Archetype a, float goblinHeight)
         {
             string path = EnemyModels + a.id + ".fbx";
             var model = PrepareModel(path);
             if (model == null) { Debug.LogWarning("[GoblinUpgrade] Model missing: " + path); return false; }
-            var controller = PrepareController(a.id, path);
+            bool animated = AssetDatabase.LoadAllAssetsAtPath(path).OfType<AnimationClip>().Any(c => !c.name.StartsWith("__"));
 
             var root = actor.transform;
             var old = actor.visual != null && actor.visual != root ? actor.visual.gameObject : null;
+            // remove placeholders and leftovers of an interrupted run
             foreach (Transform child in root.Cast<Transform>().ToArray())
-                if (child.name.Contains("Oval") && child.gameObject != old) Undo.DestroyObjectImmediate(child.gameObject);
+                if ((child.name.Contains("Oval") || child.name == "Visual") && child.gameObject != old) Undo.DestroyObjectImmediate(child.gameObject);
             if (old != null) Undo.DestroyObjectImmediate(old);
 
             var visual = (GameObject)PrefabUtility.InstantiatePrefab(model, root);
             Undo.RegisterCreatedObjectUndo(visual, "Enemy model");
             visual.name = "Visual";
             visual.transform.localPosition = Vector3.zero;
-            visual.transform.localRotation = Quaternion.identity;
-            visual.transform.localScale = Vector3.one * a.scale;
-            var animator = visual.GetComponent<Animator>() ?? visual.AddComponent<Animator>();
-            animator.runtimeAnimatorController = controller; animator.applyRootMotion = false;
+            // keep the importer's axis conversion stored on the model root (Blender Z-up → Unity Y-up)
+            visual.transform.localRotation = model.transform.localRotation;
+            visual.transform.localScale = Vector3.one;
+            Debug.Log("[GoblinUpgrade] " + a.id + " prefab root rotation " + model.transform.localEulerAngles.ToString("0") +
+                      ", first part rotation " + (model.transform.childCount > 0 ? model.transform.GetChild(0).localEulerAngles.ToString("0") : "-"));
+            if (visual.GetComponentsInChildren<Renderer>().Length == 0) { Debug.LogWarning("[GoblinUpgrade] " + a.id + " has no renderers"); return false; }
+            OrientModel(visual.transform, root, a.id);
+            {
+                // FBX units vary (cm vs m): fit the model to a height relative to the goblin
+                var rs = visual.GetComponentsInChildren<Renderer>();
+                Bounds raw = rs[0].bounds; foreach (var r in rs) raw.Encapsulate(r.bounds);
+                float want = goblinHeight * a.scale;
+                visual.transform.localScale = Vector3.one * (want / Mathf.Max(raw.size.y, 1e-4f));
+                Debug.Log("[GoblinUpgrade] " + a.id + ": raw height " + raw.size.y.ToString("0.###") + " → " + want.ToString("0.00") + " m");
+            }
+            if (animated)
+            {
+                // Unity's fake-null: never use ?? with components.
+                var animator = visual.GetComponent<Animator>();
+                if (animator == null) animator = visual.AddComponent<Animator>();
+                animator.runtimeAnimatorController = PrepareController(a.id, path);
+                animator.applyRootMotion = false;
+            }
+            // static models (no rig) are animated procedurally by EnemyActor
 
-            FaceForward(visual.transform, root);
             var renderers = visual.GetComponentsInChildren<Renderer>();
             Bounds b = renderers[0].bounds; foreach (var r in renderers) b.Encapsulate(r.bounds);
             // stand on the ground and centre the body over the controller
@@ -158,23 +201,58 @@ namespace Goblingame.TestScene.Editor
             return true;
         }
 
-        /// <summary>Turns the model so the centre of its eyes points along the actor's forward.</summary>
-        private static void FaceForward(Transform visual, Transform root)
+        /// <summary>
+        /// Stands the model upright and turns it to face the actor's forward.
+        /// Up: of the 6 axis-aligned orientations, pick the one where the eyes sit near the top
+        /// and the model is taller than a flat slab. Facing: eyes point along root.forward.
+        /// </summary>
+        private static void OrientModel(Transform visual, Transform root, string id)
         {
-            var smr = visual.GetComponentInChildren<SkinnedMeshRenderer>();
-            if (smr == null || smr.sharedMesh == null) return;
-            var mesh = smr.sharedMesh;
-            int eyeIndex = Array.FindIndex(smr.sharedMaterials, m => m != null && m.name.StartsWith("eye", StringComparison.OrdinalIgnoreCase));
-            if (eyeIndex < 0 || eyeIndex >= mesh.subMeshCount) return;
-            Vector3[] verts; int[] tris;
-            try { verts = mesh.vertices; tris = mesh.GetTriangles(eyeIndex); } catch { return; }
-            if (tris.Length == 0) return;
-            Vector3 eye = Vector3.zero; foreach (int i in tris) eye += verts[i]; eye /= tris.Length;
-            Vector3 all = Vector3.zero; foreach (var v in verts) all += v; all /= verts.Length;
-            Vector3 dir = smr.transform.TransformDirection(eye - all); dir.y = 0;
-            if (dir.sqrMagnitude < 1e-6f) return;
+            var eyes = new List<(Transform t, Vector3 p)>();
+            foreach (var r in visual.GetComponentsInChildren<Renderer>())
+            {
+                Mesh mesh = null;
+                if (r is SkinnedMeshRenderer s) mesh = s.sharedMesh;
+                else { var mf = r.GetComponent<MeshFilter>(); if (mf != null) mesh = mf.sharedMesh; }
+                if (mesh == null) continue;
+                var mats = r.sharedMaterials;
+                for (int sub = 0; sub < Mathf.Min(mats.Length, mesh.subMeshCount); sub++)
+                {
+                    if (mats[sub] == null || !mats[sub].name.StartsWith("eye", StringComparison.OrdinalIgnoreCase)) continue;
+                    Vector3[] verts; int[] tris;
+                    try { verts = mesh.vertices; tris = mesh.GetTriangles(sub); } catch { continue; }
+                    foreach (int i in tris) eyes.Add((r.transform, verts[i]));
+                }
+            }
+            if (eyes.Count == 0) { Debug.LogWarning("[GoblinUpgrade] " + id + ": no eye material; orientation unchanged."); return; }
+
+            Vector3 Eye() { Vector3 e = Vector3.zero; foreach (var (t, p) in eyes) e += t.TransformPoint(p); return e / eyes.Count; }
+            Bounds All() { var rs = visual.GetComponentsInChildren<Renderer>(); Bounds b = rs[0].bounds; foreach (var r in rs) b.Encapsulate(r.bounds); return b; }
+
+            Quaternion start = visual.rotation;
+            Quaternion[] options = { Quaternion.identity, Quaternion.Euler(90, 0, 0), Quaternion.Euler(-90, 0, 0), Quaternion.Euler(0, 0, 90), Quaternion.Euler(0, 0, -90), Quaternion.Euler(180, 0, 0) };
+            float bestScore = float.MinValue, original = 0f; Quaternion best = start; var log = new System.Text.StringBuilder();
+            foreach (var o in options)
+            {
+                visual.rotation = o * start;
+                Bounds b = All(); Vector3 e = Eye();
+                float eyeHeight = (e.y - b.min.y) / Mathf.Max(b.size.y, 1e-6f);            // 1 = top of the model
+                float tall = Mathf.Min(1.5f, b.size.y / Mathf.Max(b.size.x, b.size.z, 1e-6f)); // flat slab → ~0
+                float score = eyeHeight * tall;
+                if (o == Quaternion.identity) original = score;
+                log.Append(o.eulerAngles.ToString("0") + "=" + score.ToString("0.00") + "(eye " + eyeHeight.ToString("0.00") + ", tall " + tall.ToString("0.00") + ") ");
+                if (score > bestScore) { bestScore = score; best = o * start; }
+            }
+            // the imported orientation is trusted unless it is clearly lying down
+            if (original >= bestScore * 0.6f) best = start;
+            visual.rotation = best;
+            Debug.Log("[GoblinUpgrade] " + id + " upright candidates: " + log + "→ " + best.eulerAngles.ToString("0"));
+
+            Bounds all = All(); Vector3 dir = Eye() - all.center; dir.y = 0;
+            if (dir.sqrMagnitude < 1e-8f) return;
             Vector3 want = root.forward; want.y = 0;
-            visual.rotation = Quaternion.FromToRotation(dir.normalized, want.normalized) * visual.rotation;
+            // pure yaw (FromToRotation could flip around another axis for opposite vectors)
+            visual.rotation = Quaternion.AngleAxis(Vector3.SignedAngle(dir, want, Vector3.up), Vector3.up) * visual.rotation;
         }
 
         private static GameObject PrepareModel(string path)
@@ -186,7 +264,8 @@ namespace Goblingame.TestScene.Editor
             if (!importer.importAnimation) { importer.importAnimation = true; changed = true; }
             if (!importer.isReadable) { importer.isReadable = true; changed = true; }
             if (importer.importCameras || importer.importLights) { importer.importCameras = false; importer.importLights = false; changed = true; }
-            if (importer.clipAnimations == null || importer.clipAnimations.Length == 0 || importer.clipAnimations.Any(c => c.name != "Idle" && c.name != "Walk"))
+            if (importer.defaultClipAnimations.Length > 0 &&
+                (importer.clipAnimations == null || importer.clipAnimations.Length == 0 || importer.clipAnimations.Any(c => c.name != "Idle" && c.name != "Walk")))
             {
                 var takes = importer.defaultClipAnimations;
                 foreach (var t in takes)
@@ -196,16 +275,10 @@ namespace Goblingame.TestScene.Editor
                 }
                 importer.clipAnimations = takes; changed = true;
             }
-            // reuse the palette materials made for the original enemy pass, if present
-            foreach (var source in AssetDatabase.LoadAllAssetsAtPath(path).OfType<Material>())
-            {
-                string key = source.name.Split('.')[0];
-                var mat = AssetDatabase.LoadAssetAtPath<Material>(PaletteFolder + key + ".mat");
-                if (mat == null) continue;
-                var id = new AssetImporter.SourceAssetIdentifier(typeof(Material), source.name);
-                if (importer.GetExternalObjectMap().TryGetValue(id, out var existing) && existing == mat) continue;
-                importer.AddRemap(id, mat); changed = true;
-            }
+            // keep the model's own Blender colours (undo palette remaps of an earlier pass)
+            foreach (var pair in importer.GetExternalObjectMap().ToArray())
+                if (pair.Key.type == typeof(Material) && AssetDatabase.GetAssetPath(pair.Value).StartsWith(PaletteFolder))
+                { importer.RemoveRemap(pair.Key); changed = true; }
             if (changed) importer.SaveAndReimport();
             return AssetDatabase.LoadAssetAtPath<GameObject>(path);
         }

@@ -106,7 +106,8 @@ namespace Goblingame.TestScene
         private void UpdateReticle()
         {
             var locked=view!=null?view.LockTarget:null;
-            if(locked==null||cam==null||locked.Health==null){reticle.gameObject.SetActive(false);return;}
+            bool menuOpen=bestiary!=null&&bestiary.activeSelf;
+            if(menuOpen||locked==null||cam==null||locked.Health==null){reticle.gameObject.SetActive(false);return;}
             Vector3 screen=cam.WorldToScreenPoint(locked.Health.HitPoint+Vector3.up*.2f);
             if(screen.z<0){reticle.gameObject.SetActive(false);return;}
             reticle.gameObject.SetActive(true);
@@ -272,6 +273,7 @@ namespace Goblingame.TestScene
             var go=new GameObject("Portrait Camera");
             var cam=go.AddComponent<Camera>();
             var rt=new RenderTexture(width,height,24,RenderTextureFormat.ARGB32){name=subject.name+" Portrait",antiAliasing=4};
+            Texture2D result=null;
             try
             {
                 cam.enabled=false;cam.clearFlags=CameraClearFlags.SolidColor;cam.backgroundColor=new Color(.11f,.10f,.09f,1f);
@@ -285,15 +287,20 @@ namespace Goblingame.TestScene
                 go.transform.position=focus+forward*dist+side*dist*.25f+Vector3.up*h*.03f;
                 go.transform.LookAt(focus);
                 cam.Render();
+                // copy into a normal texture: render-texture contents are not guaranteed to persist
+                var prev=RenderTexture.active;RenderTexture.active=rt;
+                result=new Texture2D(width,height,TextureFormat.RGBA32,false){name=subject.name+" Portrait"};
+                result.ReadPixels(new Rect(0,0,width,height),0,0);result.Apply();
+                RenderTexture.active=prev;
             }
             catch(System.Exception e){Debug.LogWarning("Portrait render failed for "+subject.name+": "+e.Message);}
             finally
             {
                 foreach(var r in hidden)if(r!=null)r.enabled=true;
                 foreach(var c in canvases)if(c!=null)c.enabled=true;
-                Object.Destroy(go);
+                cam.targetTexture=null;Object.Destroy(go);rt.Release();Object.Destroy(rt);
             }
-            return rt;
+            return result;
         }
     }
 }
