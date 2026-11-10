@@ -12,6 +12,12 @@ namespace Goblingame.TestScene
         [SerializeField, Min(0f)] private float runSpeed = 5.5f;
         [SerializeField, Min(0f)] private float speedChangeRate = 12f;
         [SerializeField, Min(0f)] private float turnSpeed = 540f;
+        [Tooltip("How quickly the run heading follows the keys / camera (seconds, smaller = snappier).")]
+        [SerializeField, Min(0.01f)] private float headingSmoothTime = 0.09f;
+        [Tooltip("How quickly the body turns to the heading (seconds).")]
+        [SerializeField, Min(0.01f)] private float bodySmoothTime = 0.07f;
+        private float moveYaw, moveYawVelocity, bodyYawVelocity;
+        private bool hadInput, grounded0 = true;
         [Header("Jump")]
         [SerializeField, Min(0f)] private float jumpHeight = 1.15f;
         [SerializeField, Min(0f)] private float gravity = 22f;
@@ -154,18 +160,36 @@ namespace Goblingame.TestScene
             forward.y = 0f;
             if (forward.sqrMagnitude < 0.001f) forward = Vector3.forward;
             forward.Normalize();
-            Vector3 direction = forward * input.y + Vector3.Cross(Vector3.up, forward) * input.x;
+            Vector3 wanted = forward * input.y + Vector3.Cross(Vector3.up, forward) * input.x;
+            // Heading is an angle that glides toward the wanted one: key changes blend into arcs instead of
+            // snapping between 8 directions, and turning the camera while holding a key curves the run.
+            Vector3 direction = Vector3.zero;
+            if (wanted.sqrMagnitude > 0.001f)
+            {
+                float wantYaw = Mathf.Atan2(wanted.x, wanted.z) * Mathf.Rad2Deg;
+                if (!hadInput) { moveYaw = Mathf.Abs(Mathf.DeltaAngle(transform.eulerAngles.y, wantYaw)) > 120f ? wantYaw : transform.eulerAngles.y; moveYawVelocity = 0f; }
+                moveYaw = Mathf.SmoothDampAngle(moveYaw, wantYaw, ref moveYawVelocity, headingSmoothTime, turnSpeed * 1.5f);
+                direction = Quaternion.Euler(0f, moveYaw, 0f) * Vector3.forward * Mathf.Min(1f, wanted.magnitude);
+                // sharp turns cost a little speed, so a U-turn arcs instead of moon-walking
+                float turn = Mathf.Abs(Mathf.DeltaAngle(moveYaw, wantYaw));
+                if (turn > 60f && grounded0) horizontalSpeed = Mathf.MoveTowards(horizontalSpeed, horizontalSpeed * 0.6f, speedChangeRate * 0.5f * Time.deltaTime);
+            }
+            hadInput = wanted.sqrMagnitude > 0.001f;
+
+            // body yaw follows smoothly (critically damped), faster when the combat system aims at a target
             Vector3 facing = combat != null && combat.HasFacing ? combat.FacingDirection : Vector3.zero;
             facing.y = 0f;
-            if (facing.sqrMagnitude > 0.001f)
-                transform.rotation = Quaternion.RotateTowards(transform.rotation,
-                    Quaternion.LookRotation(facing), turnSpeed * 1.6f * Time.deltaTime);
-            else if (direction.sqrMagnitude > 0.001f)
-                transform.rotation = Quaternion.RotateTowards(transform.rotation,
-                    Quaternion.LookRotation(direction), turnSpeed * Time.deltaTime);
+            Vector3 look = facing.sqrMagnitude > 0.001f ? facing : direction;
+            if (look.sqrMagnitude > 0.001f)
+            {
+                float bodyYaw = Mathf.SmoothDampAngle(transform.eulerAngles.y, Mathf.Atan2(look.x, look.z) * Mathf.Rad2Deg, ref bodyYawVelocity,
+                    facing.sqrMagnitude > 0.001f ? 0.05f : bodySmoothTime, turnSpeed * 1.6f);
+                transform.rotation = Quaternion.Euler(0f, bodyYaw, 0f);
+            }
+            else bodyYawVelocity = 0f;
 
             // ── jump (buffered press + coyote time so it never feels like it was eaten)
-            bool grounded = controller.isGrounded;
+            bool grounded = controller.isGrounded; grounded0 = grounded;
             if (grounded) lastGroundedTime = Time.time;
             if (Application.isFocused && keyboard != null && keyboard.spaceKey.wasPressedThisFrame) jumpPressedTime = Time.time;
             bool canJump = combat == null || (!combat.IsDead && !combat.MovementLocked);

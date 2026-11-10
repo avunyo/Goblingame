@@ -58,6 +58,25 @@ namespace Goblingame.TestScene.Dev
             o.GetType().GetMethod(method, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)?.Invoke(o, args);
 
         /// <summary>Share of pixels that differ from the background (corner) colour — i.e. how much of the subject is in frame.</summary>
+        /// <summary>Where the model's face really points: perpendicular to the line between its eyes.</summary>
+        private static Vector3 EyeForward(EnemyActor e)
+        {
+            var eyes = new List<Vector3>();
+            foreach (var r in e.visual.GetComponentsInChildren<Renderer>())
+            {
+                string n = r.name.ToLowerInvariant();
+                if ((n.StartsWith("eye") || n.Contains(" eye")) && !n.Contains("socket")) eyes.Add(r.bounds.center);
+            }
+            if (eyes.Count < 2) return e.transform.forward;
+            Vector3 a = eyes[0], b = eyes[1]; float far = 0;
+            for (int i = 0; i < eyes.Count; i++) for (int j = i + 1; j < eyes.Count; j++) { var d = eyes[j] - eyes[i]; d.y = 0; if (d.sqrMagnitude > far) { far = d.sqrMagnitude; a = eyes[i]; b = eyes[j]; } }
+            Vector3 across = b - a; across.y = 0;
+            Vector3 face = Vector3.Cross(across.normalized, Vector3.up);
+            Vector3 mid = (a + b) * .5f - e.transform.position; mid.y = 0;
+            if (Vector3.Dot(face, mid) < 0) face = -face;
+            return face;
+        }
+
         private static float Brightness(Texture2D t)
         {
             var px = t.GetPixels(); Color bg = px[0]; int hit = 0;
@@ -175,6 +194,36 @@ namespace Goblingame.TestScene.Dev
             Check(wasAir, "Goblin jumps (Space)");
             Check(maxY - y0 > 0.8f && maxY - y0 < 1.6f, "Jump height " + (maxY - y0).ToString("0.00") + " m");
             Check(!mv.IsAirborne && Mathf.Abs(combat.transform.position.y - y0) < 0.1f, "Goblin lands back on the ground");
+
+            // ── smooth heading: switching from "forward" to "right" turns through an arc, no 45° snaps
+            {
+                var mvh = combat.GetComponent<GoblinMovement>();
+                Call(view, "Release");   // a free camera, so "right" stays put while the goblin turns
+                Line("info: camera locked during heading test = " + view.IsLocked);
+                mvh.simulatedInput = Vector2.up;
+                for (float t = 0; t < 0.6f; t += Time.unscaledDeltaTime) yield return null;
+                float prev = combat.transform.eulerAngles.y, maxStep = 0f;
+                Vector3 camRight = Quaternion.Euler(0, 90, 0) * view.PlanarForward;
+                float wantYaw = Mathf.Atan2(camRight.x, camRight.z) * Mathf.Rad2Deg;
+                mvh.simulatedInput = Vector2.right;
+                float reached = -1f;
+                for (float t = 0; t < 0.9f; t += Time.unscaledDeltaTime)
+                {
+                    yield return null;
+                    float y = combat.transform.eulerAngles.y;
+                    Vector3 right = Quaternion.Euler(0, 90, 0) * view.PlanarForward;   // the heading the game asks for right now
+                    wantYaw = Mathf.Atan2(right.x, right.z) * Mathf.Rad2Deg;
+                    maxStep = Mathf.Max(maxStep, Mathf.Abs(Mathf.DeltaAngle(prev, y)) / Mathf.Max(Time.deltaTime, 0.001f) * (1f / 60f));
+                    prev = y;
+                    if (reached < 0 && Mathf.Abs(Mathf.DeltaAngle(y, wantYaw)) < 8f) reached = t;
+                }
+                mvh.simulatedInput = Vector2.zero;
+                Check(maxStep < 22f, "Goblin turns smoothly (max " + maxStep.ToString("0") + "° per 60 fps frame)");
+                Check(reached > 0.08f && reached < 0.6f, "…and still reaches the new heading quickly (" + reached.ToString("0.00") + " s, final error " +
+                      Mathf.Abs(Mathf.DeltaAngle(combat.transform.eulerAngles.y, wantYaw)).ToString("0") + "°)");
+                Set(view, "manualRelease", false);
+                yield return new WaitForSecondsRealtime(0.4f);
+            }
 
             // ── lock-on
             EnemyActor rat = enemies.Find(e => e.id == "RatRogue") ?? enemies[0];
@@ -297,6 +346,11 @@ namespace Goblingame.TestScene.Dev
                 yield return new WaitForSecondsRealtime(1.3f);
                 yield return Shot("06_" + e.id);
                 Check(e.IsEngaged, e.displayName + " notices the goblin");
+                for (float t = 0; t < 3f && e.Status != "ВЫЖИДАЕТ" && !e.IsTelegraphing; t += Time.unscaledDeltaTime) yield return null;
+                yield return new WaitForSecondsRealtime(0.25f);
+                Vector3 toG = combat.transform.position - e.transform.position; toG.y = 0;
+                float faceErr = Vector3.Angle(EyeForward(e), toG);
+                Check(faceErr < 15f, e.displayName + " looks straight at the goblin (eyes off by " + faceErr.ToString("0") + "°, state " + e.Status + ")");
                 var torso = e.visual.Find("Rig/Hips/Torso");
                 var armL = e.visual.Find("Rig/Hips/Torso/ArmL"); var armR = e.visual.Find("Rig/Hips/Torso/ArmR");
                 Quaternion l0 = armL != null ? armL.localRotation : Quaternion.identity, r0 = armR != null ? armR.localRotation : Quaternion.identity;

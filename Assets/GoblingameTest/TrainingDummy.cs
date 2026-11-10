@@ -40,6 +40,7 @@ namespace Goblingame.TestScene
             Color shade=Color.Lerp(new Color(.35f,.18f,.08f),new Color(.65f,.4f,.15f),target.Fraction);
             if(state==State.Down)shade=Color.gray;
             if(state==State.Windup)shade=Color.Lerp(Color.yellow,Color.red,1-Mathf.Clamp01(timer/.9f));
+            if(color==null)color=new MaterialPropertyBlock();   // survives a script reload during Play
             color.SetColor("_BaseColor",Color.Lerp(shade,Color.white,flash));visual.SetPropertyBlock(color);
             float lean=state==State.Down?65:state==State.Windup?-10:state==State.Recovery?18*Mathf.Clamp01(timer/1.4f):flash*10;
             visual.transform.localRotation=Quaternion.Slerp(visual.transform.localRotation,restRotation*Quaternion.Euler(lean,0,0),1-Mathf.Exp(-12*Time.deltaTime));

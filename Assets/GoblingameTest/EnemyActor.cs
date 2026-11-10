@@ -39,7 +39,8 @@ namespace Goblingame.TestScene
         private GoblinCombat player;
         private Vector3 home,destination,knock;
         private Quaternion restRotation;private Vector3 restPosition,restScale;
-        private float timer,cooldown,vertical,poiseDamage,flash,lean,circleSign=1f,alertPop,gait,stride,walkRate=1f;
+        private float timer,cooldown,vertical,poiseDamage,flash,lean,circleSign=1f,alertPop,gait,stride,walkRate=1f,faceYawVelocity;
+        private Vector3 steer;
         private bool walking,struck;
         private TextMesh alert;
         private Camera view;
@@ -222,7 +223,11 @@ namespace Goblingame.TestScene
             // movement
             if(controller.isGrounded&&vertical<0)vertical=-2;vertical-=20*dt;
             Vector3 before=transform.position;
-            Vector3 velocity=move.normalized*speed*Mathf.Clamp01(move.magnitude)+knock;
+            // ease into / out of motion instead of starting and stopping instantly (the strike lunge stays snappy)
+            Vector3 desired=move.normalized*speed*Mathf.Clamp01(move.magnitude);
+            float accel=state==State.Strike?999f:Mathf.Lerp(12f,5f,Mathf.Clamp01((controller.height-1.4f)/1.2f));
+            steer=Vector3.MoveTowards(steer,desired,accel*dt);
+            Vector3 velocity=steer+knock;
             knock=Vector3.MoveTowards(knock,Vector3.zero,dt*12f);
             controller.Move((velocity+Vector3.up*vertical)*dt);
             Vector3 travel=Flat(transform.position-before);
@@ -295,7 +300,15 @@ namespace Goblingame.TestScene
             if(view!=null)alert.transform.rotation=view.transform.rotation;
         }
 
-        private void Face(Vector3 direction,float degreesPerSecond){direction.y=0;if(direction.sqrMagnitude>.001f)transform.rotation=Quaternion.RotateTowards(transform.rotation,Quaternion.LookRotation(direction),degreesPerSecond*Time.deltaTime);}
+        // smooth, critically damped turning (heavier enemies turn slower)
+        private void Face(Vector3 direction,float degreesPerSecond)
+        {
+            direction.y=0;if(direction.sqrMagnitude<.001f)return;
+            float want=Mathf.Atan2(direction.x,direction.z)*Mathf.Rad2Deg;
+            float smooth=Mathf.Clamp(36f/degreesPerSecond,.06f,.45f);
+            float yaw=Mathf.SmoothDampAngle(transform.eulerAngles.y,want,ref faceYawVelocity,smooth,degreesPerSecond*1.4f);
+            transform.rotation=Quaternion.Euler(0f,yaw,0f);
+        }
         private bool Animated=>animator!=null&&animator.runtimeAnimatorController!=null;
         private void SetWalking(bool value,float rate)
         {

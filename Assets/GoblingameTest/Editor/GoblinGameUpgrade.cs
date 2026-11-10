@@ -47,7 +47,7 @@ namespace Goblingame.TestScene.Editor
             EditorApplication.delayCall += () => RunQueued(request);
         }
 
-        private static void RunQueued(string request)
+        internal static void RunQueued(string request)
         {
             if (!File.Exists(request)) return;
             if (EditorApplication.isPlayingOrWillChangePlaymode || EditorApplication.isCompiling)
@@ -256,6 +256,26 @@ namespace Goblingame.TestScene.Editor
 
             Bounds all = All(); Vector3 dir = Eye() - all.center; dir.y = 0;
             if (dir.sqrMagnitude < 1e-8f) return;
+            // Precise facing: the face points perpendicular to the line between the two eyes.
+            // (The model centre is pulled sideways by shields / tails / weapons, so it only decides the sign.)
+            var clusters = eyes.GroupBy(e => e.t).Select(g => g.Aggregate(Vector3.zero, (acc, e) => acc + e.t.TransformPoint(e.p)) / g.Count()).ToList();
+            if (clusters.Count >= 2)
+            {
+                Vector3 a = clusters[0], b = clusters[1]; float far = 0f;
+                for (int i = 0; i < clusters.Count; i++) for (int j = i + 1; j < clusters.Count; j++)
+                {
+                    Vector3 d = clusters[j] - clusters[i]; d.y = 0;
+                    if (d.sqrMagnitude > far) { far = d.sqrMagnitude; a = clusters[i]; b = clusters[j]; }
+                }
+                Vector3 across = b - a; across.y = 0;
+                if (across.sqrMagnitude > 1e-8f)
+                {
+                    Vector3 face = Vector3.Cross(across.normalized, Vector3.up);
+                    if (Vector3.Dot(face, dir) < 0f) face = -face;
+                    Debug.Log("[GoblinUpgrade] " + id + " facing from eye pair (centre estimate was off by " + Vector3.Angle(face, dir).ToString("0") + "°)");
+                    dir = face;
+                }
+            }
             Vector3 want = root.forward; want.y = 0;
             // pure yaw (FromToRotation could flip around another axis for opposite vectors)
             visual.rotation = Quaternion.AngleAxis(Vector3.SignedAngle(dir, want, Vector3.up), Vector3.up) * visual.rotation;

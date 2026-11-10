@@ -22,7 +22,7 @@ namespace Goblingame.TestScene.Editor
             if (File.Exists(Request)) EditorApplication.delayCall += RunQueued;
         }
 
-        private static void RunQueued()
+        internal static void RunQueued()
         {
             if (!File.Exists(Request)) return;
             if (EditorApplication.isCompiling || EditorApplication.isPlayingOrWillChangePlaymode) { EditorApplication.delayCall += RunQueued; return; }
