@@ -22,8 +22,12 @@ namespace Goblingame.TestScene
         private static readonly int RunningParameter = Animator.StringToHash("Running");
         private RuntimeAnimatorController configuredController;
         private GoblinCombat combat;
+        private Vector3 externalVelocity;
         public bool IsMoving { get; private set; }
         public bool IsRunning { get; private set; }
+
+        /// <summary>Short burst of motion (attack lunge, knockback). Decays quickly.</summary>
+        public void Push(Vector3 velocity) { velocity.y = 0f; externalVelocity = velocity; }
 
         private void Awake()
         {
@@ -108,6 +112,7 @@ namespace Goblingame.TestScene
             }
             input = Vector2.ClampMagnitude(input, 1f);
             if (combat != null && combat.MovementLocked) input = Vector2.zero;
+            if (combat != null && combat.IsDead) externalVelocity = Vector3.zero;
             bool running = hasRunController && Application.isFocused && keyboard != null &&
                 (keyboard.leftShiftKey.isPressed || keyboard.rightShiftKey.isPressed) && input.sqrMagnitude > 0f;
             horizontalSpeed = Mathf.MoveTowards(horizontalSpeed, input.sqrMagnitude > 0f ?
@@ -118,14 +123,21 @@ namespace Goblingame.TestScene
             if (forward.sqrMagnitude < 0.001f) forward = Vector3.forward;
             forward.Normalize();
             Vector3 direction = forward * input.y + Vector3.Cross(Vector3.up, forward) * input.x;
-            if (direction.sqrMagnitude > 0.001f)
+            Vector3 facing = combat != null && combat.HasFacing ? combat.FacingDirection : Vector3.zero;
+            facing.y = 0f;
+            if (facing.sqrMagnitude > 0.001f)
+                transform.rotation = Quaternion.RotateTowards(transform.rotation,
+                    Quaternion.LookRotation(facing), turnSpeed * 1.6f * Time.deltaTime);
+            else if (direction.sqrMagnitude > 0.001f)
                 transform.rotation = Quaternion.RotateTowards(transform.rotation,
                     Quaternion.LookRotation(direction), turnSpeed * Time.deltaTime);
 
             if (controller.isGrounded && verticalSpeed < 0f) verticalSpeed = -2f;
             verticalSpeed += -20f * Time.deltaTime;
             Vector3 before = transform.position;
-            controller.Move((direction * horizontalSpeed + Vector3.up * verticalSpeed) * Time.deltaTime);
+            Vector3 push = externalVelocity;
+            externalVelocity = Vector3.MoveTowards(externalVelocity, Vector3.zero, 18f * Time.deltaTime);
+            controller.Move((direction * horizontalSpeed + push + Vector3.up * verticalSpeed) * Time.deltaTime);
             Vector3 displacement = transform.position - before;
             displacement.y = 0f;
             IsMoving = input.sqrMagnitude > 0f && displacement.sqrMagnitude > 0.00000001f;
