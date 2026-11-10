@@ -1,0 +1,1 @@
+PASS: four enemies initialized and patrolled; health, portraits and HUD connected; enemy defeat awards experience; screenshots captured.

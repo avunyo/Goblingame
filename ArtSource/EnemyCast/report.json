@@ -1,0 +1,42 @@
+[
+  {
+    "name": "RatRogue",
+    "vertices": 779,
+    "bones": 22,
+    "actions": [
+      "Idle",
+      "Walk"
+    ],
+    "height": 2.1800003051757812
+  },
+  {
+    "name": "MossGourmand",
+    "vertices": 1146,
+    "bones": 16,
+    "actions": [
+      "Idle",
+      "Walk"
+    ],
+    "height": 2.5957558155059814
+  },
+  {
+    "name": "BoneSentinel",
+    "vertices": 755,
+    "bones": 16,
+    "actions": [
+      "Idle",
+      "Walk"
+    ],
+    "height": 2.5078845024108887
+  },
+  {
+    "name": "IronTusk",
+    "vertices": 926,
+    "bones": 16,
+    "actions": [
+      "Idle",
+      "Walk"
+    ],
+    "height": 2.879999876022339
+  }
+]

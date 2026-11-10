@@ -1,0 +1,26 @@
+{
+  "Punch": {
+    "first": 38,
+    "last": 72,
+    "impact": 0.4117647058823529,
+    "peak": 52
+  },
+  "Melee": {
+    "first": 21,
+    "last": 55,
+    "impact": 0.4117647058823529,
+    "peak": 35
+  },
+  "Headbutt": {
+    "first": 24,
+    "last": 66,
+    "impact": 0.42857142857142855,
+    "peak": 42
+  },
+  "Block": {
+    "first": 100,
+    "last": 104,
+    "impact": 0.5,
+    "peak": 102
+  }
+}

@@ -1,0 +1,42 @@
+[
+  {
+    "name": "RatRogue",
+    "walkMotionRadians": 5.427896976470947,
+    "loopPositionSeam": 6.805026640731037e-18,
+    "bones": 22,
+    "actions": [
+      "Idle",
+      "Walk"
+    ]
+  },
+  {
+    "name": "MossGourmand",
+    "walkMotionRadians": 5.427896976470947,
+    "loopPositionSeam": 3.298453098468495e-18,
+    "bones": 16,
+    "actions": [
+      "Idle",
+      "Walk"
+    ]
+  },
+  {
+    "name": "BoneSentinel",
+    "walkMotionRadians": 5.427896976470947,
+    "loopPositionSeam": 3.7195315911369025e-18,
+    "bones": 16,
+    "actions": [
+      "Idle",
+      "Walk"
+    ]
+  },
+  {
+    "name": "IronTusk",
+    "walkMotionRadians": 5.427896499633789,
+    "loopPositionSeam": 5.474027866435913e-18,
+    "bones": 16,
+    "actions": [
+      "Idle",
+      "Walk"
+    ]
+  }
+]

@@ -1,0 +1,68 @@
+[
+  {
+    "name": "Block",
+    "source_bones": 25,
+    "target_bones": 25,
+    "source_frames": [
+      1,
+      226
+    ],
+    "seconds": 7.5,
+    "source_unchanged": true
+  },
+  {
+    "name": "Death",
+    "source_bones": 25,
+    "target_bones": 25,
+    "source_frames": [
+      1,
+      272
+    ],
+    "seconds": 9.033333333333333,
+    "source_unchanged": true
+  },
+  {
+    "name": "Headbutt",
+    "source_bones": 25,
+    "target_bones": 25,
+    "source_frames": [
+      1,
+      111
+    ],
+    "seconds": 3.6666666666666665,
+    "source_unchanged": true
+  },
+  {
+    "name": "CombatIdle",
+    "source_bones": 25,
+    "target_bones": 25,
+    "source_frames": [
+      1,
+      194
+    ],
+    "seconds": 6.433333333333334,
+    "source_unchanged": true
+  },
+  {
+    "name": "Punch",
+    "source_bones": 25,
+    "target_bones": 25,
+    "source_frames": [
+      1,
+      174
+    ],
+    "seconds": 5.766666666666667,
+    "source_unchanged": true
+  },
+  {
+    "name": "Melee",
+    "source_bones": 25,
+    "target_bones": 25,
+    "source_frames": [
+      1,
+      96
+    ],
+    "seconds": 3.1666666666666665,
+    "source_unchanged": true
+  }
+]
