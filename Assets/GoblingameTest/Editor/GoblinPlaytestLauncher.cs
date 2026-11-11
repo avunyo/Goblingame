@@ -26,7 +26,27 @@ namespace Goblingame.TestScene.Editor
             nextPoll = EditorApplication.timeSinceStartup + 1.0;
             if (EditorApplication.isCompiling || EditorApplication.isPlayingOrWillChangePlaymode || EditorApplication.isUpdating) return;
             string upgrade = Path.Combine(Root, "Temp/GoblinUpgrade.request"), mesh = Path.Combine(Root, "Temp/GoblinMesh.request");
+            bool any = File.Exists(upgrade) || File.Exists(mesh) || File.Exists(Request) || File.Exists(Path.Combine(Root, "Temp/GoblinSwamp.request"));
+            if (!any) return;
+            // never run a queued job with stale code: pick up edited scripts first, come back after the reload
+            AssetDatabase.Refresh();
+            if (EditorApplication.isCompiling || EditorApplication.isUpdating) return;
             if (File.Exists(upgrade)) { GoblinGameUpgrade.RunQueued(upgrade); return; }
+            string swamp = Path.Combine(Root, "Temp/GoblinSwamp.request");
+            if (File.Exists(swamp))
+            {
+                File.Delete(swamp);
+                var active = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
+                if (active.isDirty)
+                {
+                    string copy = AssetDatabase.GenerateUniqueAssetPath("Assets/Scenes/GoblinUnsavedBeforeRetry.unity");
+                    UnityEditor.SceneManagement.EditorSceneManager.SaveScene(active, copy, true);
+                    UnityEditor.SceneManagement.EditorSceneManager.OpenScene(active.path, UnityEditor.SceneManagement.OpenSceneMode.Single);
+                    Debug.Log("[Swamp] unsaved scene state copied to " + copy + " before rebuilding");
+                }
+                try { SwampBuilder.Build(); } catch (System.Exception e) { Debug.LogException(e); }
+                return;
+            }
             if (File.Exists(mesh)) { GoblinMeshTools.RunQueued(); return; }
             if (File.Exists(Request)) StartIfRequested();
         }
@@ -34,6 +54,7 @@ namespace Goblingame.TestScene.Editor
         public static void StartIfRequested()
         {
             if (!File.Exists(Request)) return;
+            if (File.Exists(Path.Combine(Root, "Temp/GoblinSwamp.request"))) return;   // build the world first; the poll comes back
             if (EditorApplication.isCompiling || EditorApplication.isPlayingOrWillChangePlaymode) { EditorApplication.delayCall += StartIfRequested; return; }
             // pick up edited scripts first; never start Play with stale code
             AssetDatabase.Refresh();

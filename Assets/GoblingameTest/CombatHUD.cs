@@ -139,6 +139,7 @@ namespace Goblingame.TestScene
             {
                 case CombatEvents.Kind.Parried:p.text.text="ПАРИРОВАНО!";p.text.color=Gold;p.text.fontSize=34;p.life=1.1f;break;
                 case CombatEvents.Kind.Blocked:p.text.text="БЛОК  -"+Mathf.CeilToInt(amount);p.text.color=new Color(.75f,.8f,.85f);p.text.fontSize=24;break;
+                case CombatEvents.Kind.Dodged:p.text.text="УКЛОН!";p.text.color=new Color(.55f,.9f,1f);p.text.fontSize=28;p.life=.8f;break;
                 case CombatEvents.Kind.Heal:p.text.text="+"+Mathf.CeilToInt(amount);p.text.color=new Color(.45f,.9f,.3f);p.text.fontSize=26;break;
                 default:
                     p.text.text="-"+Mathf.CeilToInt(amount);

@@ -77,6 +77,23 @@ namespace Goblingame.TestScene.Dev
             return face;
         }
 
+        private static Vector3 Flat(Vector3 v) { v.y = 0; return v; }
+
+        /// <summary>An open, flat spot about `dist` from `from` (not inside rocks / trees of the swamp).</summary>
+        private Vector3 FreeSpot(Vector3 from, float dist)
+        {
+            var cc = combat.GetComponent<CharacterController>(); bool was = cc.enabled; cc.enabled = false;
+            Vector3 best = from + Vector3.back * dist;
+            for (int i = 0; i < 16; i++)
+            {
+                Vector3 p = from + Quaternion.Euler(0, 180f + i * 22.5f, 0) * Vector3.forward * dist;
+                bool blocked = Physics.CheckCapsule(p + Vector3.up * .5f, p + Vector3.up * 1.6f, .6f, ~0, QueryTriggerInteraction.Ignore) &&
+                               Physics.OverlapCapsule(p + Vector3.up * .5f, p + Vector3.up * 1.6f, .6f).Any(c => !(c is TerrainCollider) && c.name != "Ground");
+                if (!blocked) { best = p; break; }
+            }
+            cc.enabled = was; return best;
+        }
+
         private static float Brightness(Texture2D t)
         {
             var px = t.GetPixels(); Color bg = px[0]; int hit = 0;
@@ -164,7 +181,7 @@ namespace Goblingame.TestScene.Dev
             yield return Shot("01_start");
 
             // ── idle: calm, gesture only when scheduled (away from enemies)
-            Teleport(spawn + Vector3.back * 9f, spawn + Vector3.back * 20f);
+            Teleport(FreeSpot(spawn, 9f), FreeSpot(spawn, 9f) + Vector3.back * 10f);
             yield return new WaitForSecondsRealtime(0.5f);
             Line("info: InCombat at quiet spot = " + combat.InCombat);
             float maxIdle = 0f;
@@ -194,6 +211,56 @@ namespace Goblingame.TestScene.Dev
             Check(wasAir, "Goblin jumps (Space)");
             Check(maxY - y0 > 0.8f && maxY - y0 < 1.6f, "Jump height " + (maxY - y0).ToString("0.00") + " m");
             Check(!mv.IsAirborne && Mathf.Abs(combat.transform.position.y - y0) < 0.1f, "Goblin lands back on the ground");
+
+            // ── dodges: roll from standing, slide from a sprint; both dodge an incoming hit
+            {
+                var mvd = combat.GetComponent<GoblinMovement>();
+                yield return new WaitForSecondsRealtime(0.4f);
+                // roll toward open ground (an enemy that already found the goblin may be standing right in front)
+                var ccr = combat.GetComponent<CharacterController>(); ccr.enabled = false;
+                for (int i = 0; i < 12; i++)
+                {
+                    Vector3 d = Quaternion.Euler(0, i * 30f, 0) * Vector3.forward;
+                    if (!Physics.SphereCast(combat.transform.position + Vector3.up * .8f, .45f, d, out _, 3.5f, ~0, QueryTriggerInteraction.Ignore)) { combat.transform.rotation = Quaternion.LookRotation(d); break; }
+                }
+                ccr.enabled = true;
+                Vector3 p0 = combat.transform.position;
+                combat.RequestDodge();
+                yield return new WaitForSecondsRealtime(0.25f);
+                Check(combat.IsDodging, "R makes the goblin roll");
+                var dodged = combat.TakeDamage(10f, combat.transform.position + combat.transform.forward);
+                Check(dodged == HitResult.Ignored, "Mid-roll hits are dodged (" + dodged + ")");
+                var ccd = combat.GetComponent<CharacterController>();
+                for (float t = 0, tick = 0; t < 1.2f && combat.IsDodging; t += Time.unscaledDeltaTime)
+                {
+                    if (t >= tick) { tick += .1f; Line("info: roll t=" + t.ToString("0.00") + " pos=" + combat.transform.position.ToString("0.00") + " dashing=" + mvd.IsDashing + " prog=" + mvd.DashProgress.ToString("0.00") + " speed=" + mvd.CurrentSpeed.ToString("0.0") + " ccVel=" + ccd.velocity.magnitude.ToString("0.0") + " grounded=" + ccd.isGrounded + " timeScale=" + Time.timeScale); }
+                    yield return null;
+                }
+                Check(!combat.IsDodging, "Roll ends");
+                float rollDist = Vector3.Distance(Flat(p0), Flat(combat.transform.position));
+                Check(rollDist > 1.5f && rollDist < 5.5f, "Roll travels " + rollDist.ToString("0.0") + " m");
+                yield return new WaitForSecondsRealtime(0.5f);
+                // sprint toward open ground too ("forward" follows the camera)
+                Call(view, "Release");
+                for (int i = 0; i < 12; i++)
+                {
+                    Vector3 d = Quaternion.Euler(0, i * 30f, 0) * Vector3.forward;
+                    if (!Physics.SphereCast(combat.transform.position + Vector3.up * .8f, .45f, d, out _, 8f, ~0, QueryTriggerInteraction.Ignore)) { Set(view, "yaw", i * 30f); break; }
+                }
+                mvd.simulatedInput = Vector2.up;
+                for (float t = 0; t < 0.8f; t += Time.unscaledDeltaTime) yield return null;
+                Line("info: sprint check running=" + mvd.IsRunning + " speed=" + mvd.CurrentSpeed.ToString("0.0") + " moving=" + mvd.IsMoving + " locked=" + combat.MovementLocked + " pos=" + combat.transform.position.ToString("0.00"));
+                p0 = combat.transform.position;
+                combat.RequestDodge();
+                yield return new WaitForSecondsRealtime(0.3f);
+                bool sliding = combat.IsDodging && (string)Get(combat, "dodge").ToString() == "Slide";
+                Check(sliding, "R while sprinting slides (" + Get(combat, "dodge") + ")");
+                mvd.simulatedInput = Vector2.zero;
+                for (float t = 0; t < 1.2f && combat.IsDodging; t += Time.unscaledDeltaTime) yield return null;
+                float slideDist = Vector3.Distance(Flat(p0), Flat(combat.transform.position));
+                Check(slideDist > 2.5f, "Slide travels " + slideDist.ToString("0.0") + " m");
+                yield return new WaitForSecondsRealtime(0.5f);
+            }
 
             // ── smooth heading: switching from "forward" to "right" turns through an arc, no 45° snaps
             {
@@ -229,9 +296,10 @@ namespace Goblingame.TestScene.Dev
             EnemyActor rat = enemies.Find(e => e.id == "RatRogue") ?? enemies[0];
             Vector3 toRat = rat.transform.position - spawn; toRat.y = 0;
             Teleport(rat.transform.position - toRat.normalized * 3.0f, rat.transform.position);
+            Set(view, "yaw", Mathf.Atan2(toRat.x, toRat.z) * Mathf.Rad2Deg);   // the player is looking at the rat
             yield return new WaitForSecondsRealtime(1.2f);
             Check(rat.IsEngaged, rat.displayName + " engages the goblin");
-            Check(view.IsLocked && view.LockTarget == rat, "Camera auto-focuses " + rat.displayName + " (locked=" + (view.LockTarget != null ? view.LockTarget.displayName : "none") + ")");
+            Check(view.IsLocked && view.LockTarget.IsEngaged, "Camera auto-focuses the engaged enemy in view (" + (view.LockTarget != null ? view.LockTarget.displayName : "none") + ")");
             Check(combat.InCombat, "Goblin enters combat automatically");
             yield return Shot("02_lock_on");
 
@@ -268,6 +336,9 @@ namespace Goblingame.TestScene.Dev
 
             // ── punch combo (start it while the rat is not mid-attack, and keep it from attacking)
             for (float t = 0; t < 4f && (rat.IsTelegraphing || rat.Status == "АТАКУЕТ"); t += Time.unscaledDeltaTime) yield return null;
+            // a clean one-on-one: the other enemies step out until the rat is down
+            var benched = enemies.Where(e => e != rat).ToList();
+            foreach (var e in benched) e.gameObject.SetActive(false);
             // duel spot away from the training dummy and other enemies
             Vector3 duel = spawn + Vector3.back * 6f;
             Set(rat, "home", duel);
@@ -336,6 +407,7 @@ namespace Goblingame.TestScene.Dev
             Check(view.LockTarget != rat, "Camera releases the dead target");
             yield return Shot("05_rat_down");
 
+            foreach (var e in benched) e.gameObject.SetActive(true);
             // ── every other enemy: notice, walk, wind up and strike (screenshot of the swing)
             foreach (var e in enemies)
             {
@@ -421,7 +493,7 @@ namespace Goblingame.TestScene.Dev
             // goblin jump, seen from the side, nobody around
             {
                 var mvj = combat.GetComponent<GoblinMovement>();
-                Vector3 spot = combat.transform.position + Vector3.back * 12f + Vector3.left * 6f;
+                Vector3 spot = FreeSpot(combat.transform.position, 7f);
                 Teleport(spot, spot + Vector3.forward);
                 var camJ = Camera.main.transform;
                 camJ.position = spot + Vector3.right * 3.2f + Vector3.up * 1.4f; camJ.LookAt(spot + Vector3.up * 1.2f);
@@ -456,6 +528,24 @@ namespace Goblingame.TestScene.Dev
                     mvj.simulatedInput = Vector2.zero;
                     yield return new WaitForSecondsRealtime(0.6f);
                 }
+                // roll and slide, side view
+                for (int k = 0; k < 2; k++)
+                {
+                    Teleport(spot + Vector3.back * (k == 0 ? 0f : 4f), spot + Vector3.forward);
+                    yield return new WaitForSecondsRealtime(0.4f);
+                    if (k == 1) { mvj.simulatedInput = Vector2.up; for (float t = 0; t < 0.8f; t += Time.unscaledDeltaTime) yield return null; }
+                    combat.RequestDodge();
+                    float[] at = k == 0 ? new[] { .12f, .26f, .4f, .62f } : new[] { .12f, .3f, .55f };
+                    float t0 = Time.time; int shot = 0;
+                    while (shot < at.Length && Time.time - t0 < 1.5f)
+                    {
+                        camJ.position = combat.transform.position + combat.transform.right * 3.4f + Vector3.up * 1.0f; camJ.LookAt(combat.transform.position + Vector3.up * .7f);
+                        if (Time.time - t0 >= at[shot]) { yield return Shot("15_" + (k == 0 ? "roll" : "slide") + "_" + shot); shot++; }
+                        else yield return null;
+                    }
+                    mvj.simulatedInput = Vector2.zero;
+                    yield return new WaitForSecondsRealtime(0.8f);
+                }
             }
             // goblin face close-ups (mesh check)
             {
@@ -487,7 +577,7 @@ namespace Goblingame.TestScene.Dev
             }
             combat.gameObject.SetActive(false);
             foreach (var e in enemies) { e.enabled = false; var bar = e.transform.Find("Health"); if (bar != null) bar.gameObject.SetActive(false); var al = e.transform.Find("Alert"); if (al != null) al.gameObject.SetActive(false); }
-            Vector3 stage = combat.transform.position + Vector3.back * 12f;
+            Vector3 stage = FreeSpot(combat.transform.position, 10f);
             foreach (var e in enemies)
             {
                 var others = new List<EnemyActor>(enemies); others.Remove(e);
@@ -500,7 +590,7 @@ namespace Goblingame.TestScene.Dev
                 float h = e.GetComponent<CharacterController>().height;
                 var cam = Camera.main.transform;
                 cam.position = stage + new Vector3(h * 1.25f, h * .75f, h * 1.6f); cam.LookAt(stage + Vector3.up * h * .55f);
-                foreach (var (clipName, frac, label) in new[] { ("Idle", 0f, "idle"), ("Walk", .25f, "walk"), ("Attack", -1f, "windup"), ("Attack", -2f, "strike"), ("Hit", .2f, "hit"), ("Death", 1f, "death") })
+                foreach (var (clipName, frac, label) in new[] { ("Idle", 0f, "idle"), ("Walk", .25f, "walk"), ("Attack", -1f, "windup"), ("Attack", -2f, "strike"), ("Attack2", -1f, "windup2"), ("Attack2", -2f, "strike2"), ("Hit", .2f, "hit"), ("Death", 1f, "death") })
                 {
                     var clip = System.Array.Find(clips, c => c.name.EndsWith("_" + clipName));
                     if (clip == null) continue;
@@ -511,6 +601,22 @@ namespace Goblingame.TestScene.Dev
                 }
                 foreach (var o in others) o.gameObject.SetActive(true);
                 e.gameObject.SetActive(false);
+            }
+            // swamp region views
+            var swamp = GameObject.Find("Swamp World");
+            if (swamp != null)
+            {
+                var cam = Camera.main.transform; Vector3 c = combat.transform.position;
+                var hut = swamp.transform.Find("Mud-Dome Hut"); var walk = swamp.transform.Find("Boardwalk");
+                var views = new List<(Vector3 pos, Vector3 look, string name)>
+                {
+                    (c + new Vector3(0, 45, -70), c + new Vector3(0, 0, 10), "16_swamp_overview"),
+                    (c + new Vector3(30, 4, -30), c + new Vector3(-10, 1, 10), "16_swamp_ground"),
+                };
+                if (hut != null) views.Add((hut.position + hut.forward * 9f + Vector3.up * 2.5f + hut.right * 3f, hut.position + Vector3.up * 1.5f, "16_swamp_hut"));
+                if (walk != null && walk.childCount > 4) { var a = walk.GetChild(2).position; var b = walk.GetChild(walk.childCount - 1).position; views.Add((a - (b - a).normalized * 4f + Vector3.up * 2.2f, b + Vector3.up * .5f, "16_swamp_boardwalk")); }
+                foreach (var v in views) { cam.position = v.pos; cam.LookAt(v.look); yield return new WaitForSecondsRealtime(0.2f); yield return Shot(v.name); }
+                Check(swamp.GetComponentsInChildren<Renderer>().Length > 300, "Swamp region built (" + swamp.GetComponentsInChildren<Renderer>().Length + " renderers)");
             }
         }
 

@@ -80,6 +80,10 @@ namespace Goblingame.TestScene.Editor
             if (!EditorSceneManager.SaveScene(scene, backup, true)) throw new InvalidOperationException("Backup failed; nothing changed.");
 
             UpgradeGoblinAnimator();
+            // the in-air base pose refers to the run clip, which now starts 0.14 s later
+            var player = scene.GetRootGameObjects().FirstOrDefault(o => o.name == "Player");
+            var gc = player != null ? player.GetComponent<GoblinCombat>() : null;
+            if (gc != null) { var so = new SerializedObject(gc); var f = so.FindProperty("airStrideTime"); if (f != null) { f.floatValue = 0.13f; so.ApplyModifiedProperties(); } }
             int replaced = UpgradeEnemies(scene);
 
             EditorSceneManager.MarkSceneDirty(scene);
@@ -93,22 +97,24 @@ namespace Goblingame.TestScene.Editor
         {
             var controller = AssetDatabase.LoadAssetAtPath<AnimatorController>(GoblinController);
             if (controller == null) { Debug.LogWarning("[GoblinUpgrade] Goblin controller not found: " + GoblinController); return; }
-            foreach (string p in new[] { "IdleTime", "BlockTime", "MoveSpeed" })
+            foreach (string p in new[] { "IdleTime", "BlockTime", "MoveSpeed", "AttackSpeed" })
                 if (!controller.parameters.Any(x => x.name == p)) controller.AddParameter(p, AnimatorControllerParameterType.Float);
             var ps = controller.parameters;
-            foreach (var p in ps) if (p.name == "MoveSpeed") p.defaultFloat = 1f;
+            foreach (var p in ps) if (p.name == "MoveSpeed" || p.name == "AttackSpeed") p.defaultFloat = 1f;
             controller.parameters = ps;
             foreach (var child in controller.layers[0].stateMachine.states)
             {
                 var s = child.state;
                 string param = s.name == "Idle" || s.name == "CombatReady" || s.name == "CombatIdle" ? "IdleTime" : s.name == "Block" ? "BlockTime" : null;
                 if (s.name == "Walk" || s.name == "Run") { s.speedParameter = "MoveSpeed"; s.speedParameterActive = true; EditorUtility.SetDirty(s); }
+                if (s.name == "Punch" || s.name == "Headbutt") { s.speedParameter = "AttackSpeed"; s.speedParameterActive = true; EditorUtility.SetDirty(s); }
                 if (param == null) continue;
                 s.timeParameter = param; s.timeParameterActive = true;
                 EditorUtility.SetDirty(s);
             }
             EditorUtility.SetDirty(controller);
             AssetDatabase.SaveAssets();
+            GoblinAnimTools.BuildLoops(controller);
             Debug.Log("[GoblinUpgrade] Goblin animator: Idle/CombatReady/CombatIdle use IdleTime, Block uses BlockTime.");
         }
 

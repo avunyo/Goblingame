@@ -216,6 +216,7 @@ namespace Goblingame.TestScene.Editor
                 { "Idle", Clip(ctx, folder, "Idle", 2.4f, true, IdlePose) },
                 { "Walk", Clip(ctx, folder, "Walk", spec.walkCycle, true, WalkPose) },
                 { "Attack", Clip(ctx, folder, "Attack", spec.windup + spec.strike + spec.recover, false, AttackPose) },
+                { "Attack2", Clip(ctx, folder, "Attack2", spec.windup + spec.strike + spec.recover, false, Attack2Pose) },
                 { "Hit", Clip(ctx, folder, "Hit", .45f, false, HitPose) },
                 { "Stagger", Clip(ctx, folder, "Stagger", 1.2f, true, StaggerPose) },
                 { "Death", Clip(ctx, folder, "Death", 1.4f, false, DeathPose) },
@@ -413,28 +414,127 @@ namespace Goblingame.TestScene.Editor
         private static void IdlePose(Ctx c, Pose p, float t, float len)
         {
             float k = 1f + c.spec.heaviness, ph = t / len * Mathf.PI * 2f;
-            p.R("Torso", 2.2f * k * Mathf.Sin(ph), 0, 1.2f * Mathf.Sin(ph * 2f + 1f));
-            p.R("Head", -1.6f * Mathf.Sin(ph + .6f), 7f * Mathf.Sin(ph), 0);
-            p.R("ArmL", -3f * Mathf.Sin(ph + .4f), 0, -4f - 2f * Mathf.Sin(ph));
-            p.R("ArmR", -3f * Mathf.Sin(ph + .9f), 0, 4f + 2f * Mathf.Sin(ph));
-            p.R("Tail", 0, 18f * Mathf.Sin(ph), 6f * Mathf.Sin(ph * 2f));
+            string off = c.rightWeapon ? "ArmL" : "ArmR";
             p.R("Weapon", 3f * Mathf.Sin(ph + 1.3f), 4f * Mathf.Sin(ph + .2f), 0);
-            p.hipsOffset = Vector3.up * (.006f * k * Mathf.Sin(ph * 2f));
-            if (c.spec.style == AttackStyle.Slash) p.R(c.rightWeapon ? "ArmL" : "ArmR", -35f, 0, 0); // shield held up
+            switch (c.spec.style)
+            {
+                case AttackStyle.Stab:   // rat: crouched, nervous glances left and right
+                    p.R("Torso", 12f + 2f * Mathf.Sin(ph * 2f), 0, 1.5f * Mathf.Sin(ph * 2f));
+                    p.R("Head", -10f + 3f * Mathf.Sin(ph * 4f), 28f * Mathf.Sin(ph) * Mathf.Abs(Mathf.Sin(ph)), 4f * Mathf.Sin(ph * 3f));
+                    p.R("ArmL", -12f, 0, -6f); p.R("ArmR", -12f, 0, 6f);
+                    p.R("LegL", -10f); p.R("LegR", 6f);
+                    p.R("Tail", 0, 30f * Mathf.Sin(ph * 2f), 10f * Mathf.Sin(ph * 3f));
+                    p.hipsOffset = new Vector3(0, -.03f + .006f * Mathf.Sin(ph * 4f), 0);
+                    break;
+                case AttackStyle.Slam:   // mushroom: bouncy breathing, cap wobbling
+                    p.R("Torso", 3f * Mathf.Sin(ph * 2f), 0, 3f * Mathf.Sin(ph));
+                    p.R("Head", 4f * Mathf.Sin(ph * 2f + .5f), 6f * Mathf.Sin(ph), -5f * Mathf.Sin(ph + .8f));
+                    p.R("ArmL", -4f * Mathf.Sin(ph * 2f), 0, -10f - 5f * Mathf.Sin(ph * 2f)); p.R("ArmR", -4f * Mathf.Sin(ph * 2f), 0, 10f + 5f * Mathf.Sin(ph * 2f));
+                    p.hipsOffset = Vector3.up * (.018f * Mathf.Abs(Mathf.Sin(ph * 2f)));
+                    break;
+                case AttackStyle.Slash:  // skeleton: rattling, shield up, jaw chattering
+                    float rattle = Mathf.Sin(t * 47f) * Mathf.Max(0f, Mathf.Sin(ph * 3f));
+                    p.R("Torso", 1.5f * Mathf.Sin(ph), 3f * Mathf.Sin(ph * .5f), 1.5f * rattle);
+                    p.R("Head", -3f + 4f * rattle, 9f * Mathf.Sin(ph), 3f * rattle);
+                    p.R(off, -35f + 2f * rattle, 0, 0);
+                    p.R(c.rightWeapon ? "ArmR" : "ArmL", -6f + 2f * Mathf.Sin(ph), 0, 0);
+                    break;
+                default:                 // boar: heavy breathing, rolling shoulders, snorts
+                    float breath = Mathf.Sin(ph);
+                    p.R("Torso", 4f * k * breath + 6f, 5f * Mathf.Sin(ph * .5f), 2f * Mathf.Sin(ph * 2f));
+                    p.R("Head", 6f - 5f * Mathf.Max(0f, Mathf.Sin(ph * 4f)) * Mathf.Max(0f, breath), 6f * Mathf.Sin(ph * .5f), 0);
+                    p.R("ArmL", -4f * breath, 0, -8f - 3f * breath); p.R("ArmR", -4f * breath, 0, 8f + 3f * breath);
+                    p.hipsOffset = Vector3.up * (.01f * breath);
+                    break;
+            }
         }
 
         private static void WalkPose(Ctx c, Pose p, float t, float len)
         {
-            float ph = t / len * Mathf.PI * 2f, s = Mathf.Sin(ph), heavy = c.spec.heaviness;
-            float leg = Mathf.Lerp(32f, 24f, heavy), arm = Mathf.Lerp(26f, 16f, heavy);
-            p.R("LegL", -leg * s); p.R("LegR", leg * s);
-            p.R("ArmL", arm * s, 0, -6f); p.R("ArmR", -arm * s, 0, 6f);
-            if (c.spec.style == AttackStyle.Slash) p.R(c.rightWeapon ? "ArmL" : "ArmR", -30f - arm * s * .7f); // shield forward, less swing
-            p.R("Torso", 6f + 2f * Mathf.Sin(ph * 2f), 5f * s, Mathf.Lerp(4f, 8f, heavy) * s);
-            p.R("Head", -4f - 2f * Mathf.Sin(ph * 2f), -4f * s, -Mathf.Lerp(3f, 6f, heavy) * s);
-            p.R("Tail", 0, 25f * Mathf.Sin(ph + 1f), 0);
+            float ph = t / len * Mathf.PI * 2f, s = Mathf.Sin(ph), bounce = 0.5f - 0.5f * Mathf.Cos(ph * 2f);
+            string main = c.rightWeapon ? "ArmR" : "ArmL", off = c.rightWeapon ? "ArmL" : "ArmR";
             p.R("Weapon", 10f * Mathf.Sin(ph - .8f), 0, 4f * Mathf.Sin(ph * 2f));   // the weapon lags behind the swinging arm
-            p.hipsOffset = Vector3.up * (Mathf.Lerp(.025f, .04f, heavy) * (0.5f - 0.5f * Mathf.Cos(ph * 2f)));
+            switch (c.spec.style)
+            {
+                case AttackStyle.Stab:   // rat: low, quick scurry, tail lashing
+                    p.R("LegL", -26f * s - 8f); p.R("LegR", 26f * s - 8f);
+                    p.R("ArmL", 18f * s - 15f, 0, -8f); p.R("ArmR", -18f * s - 15f, 0, 8f);
+                    p.R("Torso", 20f + 3f * Mathf.Sin(ph * 2f), 6f * s, 4f * s);
+                    p.R("Head", -16f - 3f * Mathf.Sin(ph * 2f), -6f * s, -4f * s);
+                    p.R("Tail", 8f * Mathf.Sin(ph * 2f), 35f * Mathf.Sin(ph + 1f), 0);
+                    p.hipsOffset = new Vector3(0, -.035f + .03f * bounce, 0);
+                    break;
+                case AttackStyle.Slam:   // mushroom: side-to-side waddle, arms swinging out
+                    p.R("LegL", -18f * s); p.R("LegR", 18f * s);
+                    p.R("ArmL", 10f * s, 0, -16f - 10f * Mathf.Max(0f, s)); p.R("ArmR", -10f * s, 0, 16f + 10f * Mathf.Max(0f, -s));
+                    p.R("Torso", 3f, 4f * s, 13f * s);
+                    p.R("Head", 2f * Mathf.Sin(ph * 2f), -4f * s, -9f * s);
+                    p.hipsOffset = new Vector3(.035f * s, .03f * bounce, 0);
+                    break;
+                case AttackStyle.Slash:  // skeleton: stiff march, shield forward, rattling skull
+                    p.R("LegL", -34f * s); p.R("LegR", 34f * s);
+                    p.R(main, -12f - 22f * s, 0, 0); p.R(off, -35f + 8f * s, 0, 0);
+                    p.R("Torso", 2f, 4f * s, 2f * s);
+                    p.R("Head", -2f + 3f * Mathf.Sin(t * 41f), -3f * s, 2f * Mathf.Sin(t * 37f));
+                    p.hipsOffset = Vector3.up * (.02f * bounce);
+                    break;
+                default:                 // boar: heavy stomp, shoulders rolling, head low
+                    p.R("LegL", -24f * s); p.R("LegR", 24f * s);
+                    p.R("ArmL", 14f * s, 0, -8f); p.R("ArmR", -14f * s, 0, 8f);
+                    p.R("Torso", 12f + 3f * Mathf.Sin(ph * 2f), 9f * s, 7f * s);
+                    p.R("Head", 6f - 3f * Mathf.Sin(ph * 2f), -7f * s, -5f * s);
+                    p.hipsOffset = Vector3.up * (.05f * bounce * bounce);
+                    break;
+            }
+        }
+
+        /// <summary>The second attack of each enemy (same timing as the first, different motion).</summary>
+        private static void Attack2Pose(Ctx c, Pose p, float t, float len)
+        {
+            float w = c.spec.windup, st = c.spec.strike;
+            float a; int phase;
+            if (t < w) { a = Ease(t / w); phase = 0; }
+            else if (t < w + st) { a = EaseOut((t - w) / (st * .45f)); phase = 1; }
+            else { a = 1f - Ease((t - w - st) / c.spec.recover); phase = 2; }
+            string main = c.rightWeapon ? "ArmR" : "ArmL", off = c.rightWeapon ? "ArmL" : "ArmR";
+            float sign = c.rightWeapon ? 1f : -1f;
+            Pose windup = new Pose(), strike = new Pose(), neutral = new Pose();
+            switch (c.spec.style)
+            {
+                case AttackStyle.Stab:   // rat: wide backhand slash across the body
+                    windup.R(main, -100f, 0, 55f * sign); windup.R("Torso", 4f, -38f * sign, 0); windup.R("Weapon", -40f); windup.R("Head", 0, 20f * sign, 0);
+                    windup.hipsOffset = new Vector3(0, -.03f, -.03f);
+                    strike.R(main, -70f, 0, -55f * sign); strike.R("Torso", 14f, 40f * sign, 0); strike.R("Weapon", 30f); strike.R(off, 20f, 0, -20f * sign);
+                    strike.R("Head", 0, -15f * sign, 0); strike.R("LegL", -15f); strike.R("LegR", 15f); strike.hipsOffset = new Vector3(0, .02f, .1f);
+                    break;
+                case AttackStyle.Slam:   // mushroom: rears back and rams with its cap
+                    windup.R("Torso", -26f); windup.R("Head", -22f); windup.R("ArmL", 35f, 0, -25f); windup.R("ArmR", 35f, 0, 25f); windup.hipsOffset = new Vector3(0, .02f, -.06f);
+                    strike.R("Torso", 46f); strike.R("Head", 26f); strike.R("ArmL", 45f, 0, -35f); strike.R("ArmR", 45f, 0, 35f); strike.R("LegL", -10f); strike.R("LegR", 20f);
+                    strike.hipsOffset = new Vector3(0, -.04f, .14f);
+                    break;
+                case AttackStyle.Slash:  // skeleton: shield bash
+                    neutral.R(off, -35f);
+                    windup.R(off, 15f, 0, -20f * sign); windup.R("Torso", -6f, 30f * sign, 0); windup.R(main, -45f, 0, 10f * sign); windup.R("Head", 0, -10f * sign, 0);
+                    windup.hipsOffset = new Vector3(0, -.02f, -.04f);
+                    strike.R(off, -88f, 0, 15f * sign); strike.R("Torso", 12f, -32f * sign, 0); strike.R(main, -40f, 0, 15f * sign); strike.R("LegL", -20f); strike.R("LegR", 16f);
+                    strike.hipsOffset = new Vector3(0, -.02f, .13f);
+                    break;
+                default:                 // boar: big horizontal hammer sweep
+                    windup.R(main, -80f, 0, 60f * sign); windup.R(off, -70f, 0, 40f * sign); windup.R("Torso", 4f, -55f * sign, 0); windup.R("Weapon", -20f); windup.R("Head", 0, 15f * sign, 0);
+                    windup.hipsOffset = new Vector3(0, -.03f, -.04f);
+                    strike.R(main, -85f, 0, -45f * sign); strike.R(off, -80f, 0, -50f * sign); strike.R("Torso", 10f, 58f * sign, 0); strike.R("Weapon", 15f);
+                    strike.R("Head", 0, -20f * sign, 0); strike.R("LegL", -14f); strike.R("LegR", 12f); strike.hipsOffset = new Vector3(0, -.05f, .08f);
+                    break;
+            }
+            Pose from = phase == 0 ? neutral : windup, to = phase == 0 ? windup : strike;
+            if (phase == 2) { from = neutral; to = strike; }
+            foreach (var b in from.rot.Keys.Union(to.rot.Keys))
+            {
+                Vector3 f = from.rot.TryGetValue(b, out var v1) ? v1 : Vector3.zero, g = to.rot.TryGetValue(b, out var v2) ? v2 : Vector3.zero;
+                Vector3 e = Vector3.Lerp(f, g, a); p.R(b, e.x, e.y, e.z);
+            }
+            p.hipsOffset = Vector3.Lerp(from.hipsOffset, to.hipsOffset, a);
+            if (phase == 0) { float tremble = Mathf.Sin(t * 60f) * 1.5f * Ease(t / w); p.R("Torso", tremble * .4f, 0, tremble * .4f); }
         }
 
         private static void AttackPose(Ctx c, Pose p, float t, float len)

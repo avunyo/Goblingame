@@ -240,7 +240,11 @@ namespace Goblingame.TestScene
         {
             if(cooldown>0f||player.IsDead)return false;
             if(token!=null&&token!=this&&token.isActiveAndEnabled&&token.state!=State.Dead)return false;
-            token=this;state=State.Windup;timer=windup;return true;
+            token=this;state=State.Windup;timer=windup;
+            // alternate between the two attacks, never the same one three times in a row
+            attackVariant=sameInRow>=2?(attackVariant=="Attack"?"Attack2":"Attack"):(Random.value<.5f?"Attack":"Attack2");
+            sameInRow=attackVariant==lastVariant?sameInRow+1:1;lastVariant=attackVariant;
+            return true;
         }
 
         private void UpdateDead(float dt)
@@ -317,6 +321,8 @@ namespace Goblingame.TestScene
         }
 
         // ───────────── keyframed animation (rigged enemies) ─────────────
+        private string attackVariant="Attack",lastVariant;private int sameInRow;
+        private bool HasClip(string state)=>animator!=null&&animator.HasState(0,Animator.StringToHash("Base Layer."+state));
         private string clipState;private float attackClipLength=-1f,staggerStart,flinchUntil;
         private void Animate()
         {
@@ -325,13 +331,13 @@ namespace Goblingame.TestScene
             string want;float blend=.2f;
             switch(state)
             {
-                case State.Windup:case State.Strike:case State.Recover:want="Attack";blend=.08f;break;
+                case State.Windup:case State.Strike:case State.Recover:want=HasClip(attackVariant)?attackVariant:"Attack";blend=.08f;break;
                 case State.Stagger:want=Time.time-staggerStart<.4f?"Hit":"Stagger";blend=want=="Hit"?.05f:.25f;break;
                 case State.Dead:want="Death";blend=.1f;break;
                 default:want=Time.time<flinchUntil?"Hit":walking?"Walk":"Idle";blend=want=="Hit"?.05f:.2f;break;
             }
             if(want=="Walk")animator.speed=Mathf.Clamp(walkRate,.6f,2.2f);
-            else if(want=="Attack"&&attackClipLength>0f)animator.speed=attackClipLength/Mathf.Max(.1f,windup+strikeTime+recover);
+            else if(want.StartsWith("Attack")&&attackClipLength>0f)animator.speed=attackClipLength/Mathf.Max(.1f,windup+strikeTime+recover);
             else animator.speed=1f;
             if(want==clipState)return;
             animator.CrossFadeInFixedTime(want,blend,0,0f);

@@ -41,6 +41,18 @@ namespace Goblingame.TestScene
         [HideInInspector] public Vector2 simulatedInput;
         /// <summary>Plunge straight down (air attack).</summary>
         public void Dive(float speed) { verticalSpeed = -Mathf.Abs(speed); airVelocity *= 0.35f; }
+
+        // ── dash (roll / slide): a burst along a fixed direction that eases from startSpeed to endSpeed
+        private Vector3 dashDir; private float dashTime, dashDuration, dashStart, dashEnd;
+        public bool IsDashing => dashTime < dashDuration;
+        public float DashProgress => dashDuration > 0f ? Mathf.Clamp01(dashTime / dashDuration) : 1f;
+        public void Dash(Vector3 direction, float startSpeed, float endSpeed, float duration)
+        {
+            direction.y = 0f; if (direction.sqrMagnitude < 0.001f) direction = transform.forward;
+            dashDir = direction.normalized; dashStart = startSpeed; dashEnd = endSpeed; dashDuration = duration; dashTime = 0f;
+            transform.rotation = Quaternion.LookRotation(dashDir);
+            moveYaw = transform.eulerAngles.y; moveYawVelocity = bodyYawVelocity = 0f;
+        }
         /// <summary>Request a jump (also used by the automated playtest).</summary>
         public void RequestJump() { jumpPressedTime = Time.time; }
         private CharacterController controller;
@@ -192,7 +204,7 @@ namespace Goblingame.TestScene
             bool grounded = controller.isGrounded; grounded0 = grounded;
             if (grounded) lastGroundedTime = Time.time;
             if (Application.isFocused && keyboard != null && keyboard.spaceKey.wasPressedThisFrame) jumpPressedTime = Time.time;
-            bool canJump = combat == null || (!combat.IsDead && !combat.MovementLocked);
+            bool canJump = !IsDashing && (combat == null || (!combat.IsDead && !combat.MovementLocked));
             if (canJump && Time.time - jumpPressedTime <= jumpBuffer && Time.time - lastGroundedTime <= coyoteTime && verticalSpeed <= 0.1f)
             {
                 verticalSpeed = Mathf.Sqrt(2f * gravity * jumpHeight);
@@ -213,6 +225,15 @@ namespace Goblingame.TestScene
                 planar = airVelocity;
             }
             else airVelocity = planar;
+            if (IsDashing)
+            {
+                dashTime += Time.deltaTime;
+                float k = 1f - Mathf.Pow(1f - DashProgress, 2f);            // fast out, eases toward the end speed
+                planar = dashDir * Mathf.Lerp(dashStart, dashEnd, k);
+                transform.rotation = Quaternion.LookRotation(dashDir);
+                horizontalSpeed = Mathf.Lerp(dashStart, dashEnd, k);
+                airVelocity = planar;
+            }
 
             Vector3 before = transform.position;
             Vector3 push = externalVelocity;

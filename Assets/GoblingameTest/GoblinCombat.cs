@@ -46,23 +46,25 @@ namespace Goblingame.TestScene
 
         private struct Move
         {
-            public string state; public float start, impact, end, damage, stagger, knockback, arc; public bool heavy;
+            public string state; public float start, impact, end, damage, stagger, knockback, arc, speed; public bool heavy;
         }
         // Times are seconds inside the source clip (measured from the bone curves).
         private static readonly Move[] Combo =
         {
-            new Move{state="Punch",start=0.30f,impact=0.60f,end=0.82f,stagger=.30f,knockback=.25f,arc=65f},
-            new Move{state="Punch",start=0.82f,impact=0.97f,end=1.18f,stagger=.30f,knockback=.25f,arc=65f},
-            new Move{state="Punch",start=1.18f,impact=1.32f,end=1.50f,stagger=.35f,knockback=.35f,arc=65f},
-            new Move{state="Punch",start=1.50f,impact=1.66f,end=2.05f,stagger=.75f,knockback=1.2f,arc=80f,heavy=true},
+            // quick jabs play a little faster than the authored clip, the finisher keeps its weight
+            new Move{state="Punch",start=0.34f,impact=0.60f,end=0.82f,stagger=.30f,knockback=.25f,arc=65f,speed=1.25f},
+            new Move{state="Punch",start=0.82f,impact=0.97f,end=1.18f,stagger=.30f,knockback=.25f,arc=65f,speed=1.25f},
+            new Move{state="Punch",start=1.18f,impact=1.32f,end=1.50f,stagger=.35f,knockback=.35f,arc=65f,speed=1.2f},
+            new Move{state="Punch",start=1.50f,impact=1.66f,end=2.00f,stagger=.75f,knockback=1.2f,arc=80f,heavy=true,speed=1.0f},
         };
         private static readonly Move Headbutt =
-            new Move{state="Headbutt",start=0.10f,impact=0.40f,end=0.95f,stagger=1.0f,knockback=1.5f,arc=75f,heavy=true};
+            new Move{state="Headbutt",start=0.12f,impact=0.40f,end=0.90f,stagger=1.0f,knockback=1.5f,arc=75f,heavy=true,speed=1.15f};
 
         private static readonly int IdleTimeParam = Animator.StringToHash("IdleTime");
         private static readonly int BlockTimeParam = Animator.StringToHash("BlockTime");
         private static readonly int MoveSpeedParam = Animator.StringToHash("MoveSpeed");
-        private bool hasMoveSpeed;
+        private static readonly int AttackSpeedParam = Animator.StringToHash("AttackSpeed");
+        private bool hasMoveSpeed, hasAttackSpeed;
         private float bank, pitchLean;
         // procedural jump pose (the goblin has no jump clip)
         private Transform thighL, thighR, shinL, shinR, upperArmL, upperArmR, foreArmL, foreArmR, spine;
@@ -75,6 +77,14 @@ namespace Goblingame.TestScene
         // combo flow
         private int lastComboIndex = -1; private float lastComboEnd = -9f;
         private bool dashAttack; private Vector3 steerDir;
+        // dodge (R): slide when sprinting, roll otherwise
+        private enum Dodge { None, Roll, Slide }
+        private Dodge dodge; private float dodgeStart, dodgeDuration, nextDodge, dizzyUntil;
+        private ParticleSystem dust;
+        public bool IsDodging => dodge != Dodge.None;
+        private bool dodgeRequested;
+        /// <summary>Same as pressing R (used by the automated playtest).</summary>
+        public void RequestDodge() { dodgeRequested = true; }
         private Vector3 baseModelScale;
 
         private GoblinMovement movement;
@@ -104,7 +114,7 @@ namespace Goblingame.TestScene
         public bool IsDead => ready && health <= 0f;
         public bool IsBlocking => blocking;
         public bool IsAttacking => attacking;
-        public bool MovementLocked => ready && (IsDead || blocking || attacking || diving || Time.time < recoverUntil);
+        public bool MovementLocked => ready && (IsDead || blocking || attacking || diving || dodge != Dodge.None || Time.time < recoverUntil);
         public bool IsDiving => diving;
         public float Health => health;
         public float MaxHealth => maxHealth;
@@ -129,6 +139,7 @@ namespace Goblingame.TestScene
                 if (p.nameHash == IdleTimeParam) hasIdleTime = true;
                 if (p.nameHash == BlockTimeParam) hasBlockTime = true;
                 if (p.nameHash == MoveSpeedParam) hasMoveSpeed = true;
+                if (p.nameHash == AttackSpeedParam) hasAttackSpeed = true;
             }
             foreach (var clip in animator.runtimeAnimatorController.animationClips)
             {
@@ -139,6 +150,7 @@ namespace Goblingame.TestScene
             baseModelRotation = animator.transform.localRotation;
             baseModelScale = animator.transform.localScale;
             FindBones();
+            BuildDust();
             if (movement != null) { movement.Landed += OnLanded; movement.Jumped += OnJumped; }
             animator.Play(Animator.StringToHash("Base Layer.Idle"), 0, 0f); animator.Update(0f);
             animator.transform.localRotation = baseModelRotation;
@@ -159,6 +171,7 @@ namespace Goblingame.TestScene
             if (hasMoveSpeed && movement != null)
                 animator.SetFloat(MoveSpeedParam, Mathf.Clamp(movement.SpeedRatio, 0.55f, 1.2f));
 
+            if (dodge != Dodge.None && hasMoveSpeed) animator.SetFloat(MoveSpeedParam, 0f);   // frozen base pose under the dodge
             if (IsDead)
             {
                 if (focused && keyboard != null && keyboard.rKey.wasPressedThisFrame) Respawn();
@@ -182,6 +195,33 @@ namespace Goblingame.TestScene
             }
             if (Time.time < recoverUntil) return;   // getting up from the slam
 
+            // ── dodge: R while sprinting = slide, otherwise a (silly) forward roll. Can cancel the end of an attack.
+            if (dodge != Dodge.None)
+            {
+                if (movement == null || !movement.IsDashing) { dodge = Dodge.None; ChangeState("Idle", 0.15f, true); }
+                else
+                {
+                    if (dodge == Dodge.Slide && dust != null && Random.value < 0.6f) dust.Emit(2);
+                    return;
+                }
+            }
+            bool dodgePressed = dodgeRequested || (focused && keyboard != null && keyboard.rKey.wasPressedThisFrame);
+            dodgeRequested = false;
+            if (dodgePressed && Time.time >= nextDodge && movement != null && !movement.IsAirborne && (!attacking || hitDone) && !diving)
+            {
+                if (attacking) EndAttack(0.05f);
+                blocking = false;
+                bool sprinting = movement.IsRunning && movement.CurrentSpeed > 4f;
+                Vector3 dir = InputDirection(); if (dir.sqrMagnitude < 0.01f) dir = transform.forward;
+                dodge = sprinting ? Dodge.Slide : Dodge.Roll;
+                dodgeDuration = sprinting ? 0.78f : 0.6f;
+                dodgeStart = Time.time; nextDodge = Time.time + dodgeDuration + 0.25f;
+                if (sprinting) { movement.Dash(dir, 9.5f, 2.5f, dodgeDuration); if (hasMoveSpeed) ChangeState("Run", 0.08f, true, airStrideTime); }
+                else { movement.Dash(dir, 7.5f, 2.0f, dodgeDuration); ChangeState("Idle", 0.06f, true); dizzyUntil = Time.time + dodgeDuration + 0.45f; }
+                if (view != null) view.Shake(0.2f);
+                return;
+            }
+
             // out-of-combat regeneration
             if (!InCombat && Time.time - lastHurtTime > regenDelay && health < maxHealth)
                 health = Mathf.Min(maxHealth, health + regenPerSecond * dt);
@@ -192,20 +232,20 @@ namespace Goblingame.TestScene
 
             if (attacking)
             {
-                clipTime += dt;
+                clipTime += dt * (hasAttackSpeed ? move.speed : 1f);
                 if (punch) queuedPunch = true;
                 if (headbutt && Time.time >= nextHeadbutt) queuedHeadbutt = true;
                 if (clipTime < move.impact) FaceAttackTarget();
                 if (!hitDone && clipTime >= move.impact) { hitDone = true; DealHit(move); }
                 // block can cancel the wind-up; movement can cancel the follow-through
                 if (wantsBlock && clipTime < move.impact - 0.05f) { attacking = false; }
-                else if (moveInput && hitDone && clipTime > move.impact + 0.18f && !queuedPunch && !queuedHeadbutt) { EndAttack(0.2f); }
+                else if (moveInput && hitDone && clipTime > move.impact + 0.1f && !queuedPunch && !queuedHeadbutt) { EndAttack(0.15f); }
                 else if (clipTime >= move.end)
                 {
                     if (queuedHeadbutt) { StartHeadbutt(); return; }
                     if (queuedPunch && move.state == "Punch" && comboIndex < Combo.Length - 1) { NextPunch(); return; }
                     if (queuedPunch && move.state == "Headbutt") { comboIndex = 1; NextPunch(); return; }   // headbutt → right-left punches
-                    EndAttack(0.3f);
+                    EndAttack(0.18f);
                 }
                 if (attacking) return;
             }
@@ -292,7 +332,7 @@ namespace Goblingame.TestScene
             if (fresh)
             {
                 clipTime = move.start;
-                ChangeState("Punch", 0.08f, true, move.start);
+                ChangeState("Punch", 0.05f, true, move.start);
             }
             BeginMove();
         }
@@ -301,13 +341,14 @@ namespace Goblingame.TestScene
         {
             nextHeadbutt = Time.time + headbuttCooldown;
             move = Headbutt; comboIndex = -1; clipTime = move.start;
-            ChangeState("Headbutt", 0.08f, true, move.start);
+            ChangeState("Headbutt", 0.05f, true, move.start);
             BeginMove();
         }
 
         private void BeginMove()
         {
             attacking = true; hitDone = false; queuedPunch = false; queuedHeadbutt = false; blocking = false;
+            if (hasAttackSpeed) animator.SetFloat(AttackSpeedParam, move.speed);
             gestureClock = -1f; lastCombatTime = Time.time;
             attackTarget = PickTarget();
             steerDir = attackTarget == null ? InputDirection() : Vector3.zero;   // no target: punch where the player steers
@@ -395,6 +436,12 @@ namespace Goblingame.TestScene
         public HitResult TakeDamage(float amount, Vector3 attackerPosition)
         {
             if (!ready || IsDead || amount <= 0f) return HitResult.Ignored;
+            if (dodge != Dodge.None)
+            {
+                // invulnerable through the middle of the roll / slide
+                float t = (Time.time - dodgeStart) / Mathf.Max(0.01f, dodgeDuration);
+                if (t > 0.05f && t < 0.8f) { CombatEvents.Raise(transform.position + Vector3.up * 1.6f, 0f, CombatEvents.Kind.Dodged, true); return HitResult.Ignored; }
+            }
             lastCombatTime = lastHurtTime = Time.time;
             Vector3 dir = Flat(attackerPosition - transform.position);
             bool frontal = dir.sqrMagnitude < 0.001f || Vector3.Angle(transform.forward, dir) < blockArc * 0.5f;
@@ -533,6 +580,95 @@ namespace Goblingame.TestScene
 
         private static void Turn(Transform bone, float degrees, Vector3 axis) { if (bone != null && degrees != 0f) bone.rotation = Quaternion.AngleAxis(degrees, axis) * bone.rotation; }
 
+        private void BuildDust()
+        {
+            var go = new GameObject("Slide Dust");
+            go.transform.SetParent(transform, false);
+            go.transform.localPosition = new Vector3(0f, 0.08f, -0.2f);
+            go.transform.localRotation = Quaternion.Euler(-20f, 180f, 0f);
+            dust = go.AddComponent<ParticleSystem>();
+            dust.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+            var main = dust.main;
+            main.playOnAwake = false; main.loop = false;
+            main.startLifetime = new ParticleSystem.MinMaxCurve(0.45f, 0.8f);
+            main.startSpeed = new ParticleSystem.MinMaxCurve(0.6f, 2.0f);
+            main.startSize = new ParticleSystem.MinMaxCurve(0.18f, 0.42f);
+            main.startColor = new ParticleSystem.MinMaxGradient(new Color(.42f, .34f, .22f, .75f), new Color(.30f, .26f, .18f, .55f));
+            main.gravityModifier = -0.05f;
+            main.simulationSpace = ParticleSystemSimulationSpace.World;
+            var emission = dust.emission; emission.rateOverTime = 0f;
+            var shape = dust.shape; shape.shapeType = ParticleSystemShapeType.Cone; shape.angle = 35f; shape.radius = 0.15f;
+            var col = dust.colorOverLifetime; col.enabled = true;
+            var grad = new Gradient();
+            grad.SetKeys(new[] { new GradientColorKey(Color.white, 0f), new GradientColorKey(Color.white, 1f) },
+                         new[] { new GradientAlphaKey(1f, 0f), new GradientAlphaKey(0f, 1f) });
+            col.color = grad;
+            var size = dust.sizeOverLifetime; size.enabled = true; size.size = new ParticleSystem.MinMaxCurve(1f, AnimationCurve.Linear(0, .6f, 1, 1.6f));
+            var r = go.GetComponent<ParticleSystemRenderer>();
+            var shader = Shader.Find("Legacy Shaders/Particles/Alpha Blended") ?? Shader.Find("Sprites/Default");
+            if (shader != null)
+            {
+                const int n = 32; var tex = new Texture2D(n, n, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp };
+                for (int y = 0; y < n; y++) for (int x = 0; x < n; x++)
+                {
+                    float d = Vector2.Distance(new Vector2(x + .5f, y + .5f), new Vector2(n / 2f, n / 2f)) / (n / 2f);
+                    float a = Mathf.Clamp01(1f - d); tex.SetPixel(x, y, new Color(1f, 1f, 1f, a * a * (3f - 2f * a)));
+                }
+                tex.Apply();
+                var m = new Material(shader) { mainTexture = tex };
+                if (m.HasProperty("_TintColor")) m.SetColor("_TintColor", new Color(.5f, .5f, .5f, .5f));
+                r.sharedMaterial = m;
+            }
+        }
+
+        /// <summary>
+        /// Roll: tuck into a ball and tumble once around the body centre with a little hop, then wobble dizzily.
+        /// Slide: lean far back, lead leg straight out, trailing leg folded under, arms out for balance.
+        /// </summary>
+        private void ApplyDodgePose()
+        {
+            Vector3 right = transform.right, fwd = transform.forward;
+            float now = Time.time;
+            if (dodge == Dodge.Roll)
+            {
+                float t = Mathf.Clamp01((now - dodgeStart) / dodgeDuration);
+                float tuck = Mathf.SmoothStep(0f, 1f, t / 0.14f) * (1f - Mathf.SmoothStep(0f, 1f, (t - 0.8f) / 0.2f));
+                float spin = 360f * Mathf.SmoothStep(0f, 1f, Mathf.Clamp01((t - 0.06f) / 0.82f));
+                Turn(spine, 48f * tuck, right);
+                Turn(thighL, -100f * tuck, right); Turn(thighR, -95f * tuck, right);
+                Turn(shinL, 125f * tuck, right); Turn(shinR, 120f * tuck, right);
+                Turn(upperArmL, -65f * tuck, right); Turn(upperArmR, -65f * tuck, right);
+                Turn(upperArmL, 15f * tuck, fwd); Turn(upperArmR, -15f * tuck, fwd);
+                Turn(foreArmL, -95f * tuck, right); Turn(foreArmR, -95f * tuck, right);
+                // tumble around the body centre, with a hop so the head clears the ground
+                Vector3 pivot = transform.position + Vector3.up * 0.55f;
+                var m = animator.transform;
+                m.position = pivot + Quaternion.AngleAxis(spin, right) * (m.position - pivot) + Vector3.up * (0.22f * Mathf.Sin(t * Mathf.PI) - 0.18f * tuck);
+                m.rotation = Quaternion.AngleAxis(spin, right) * m.rotation;
+            }
+            else if (dodge == Dodge.Slide)
+            {
+                float t = Mathf.Clamp01((now - dodgeStart) / dodgeDuration);
+                float w = Mathf.SmoothStep(0f, 1f, t / 0.12f) * (1f - Mathf.SmoothStep(0f, 1f, (t - 0.8f) / 0.2f));
+                Turn(thighL, -78f * w, right); Turn(shinL, -5f * w, right);       // lead leg straight out
+                Turn(thighR, 18f * w, right); Turn(shinR, 115f * w, right);       // trailing leg folded under
+                Turn(upperArmL, -55f * w, right); Turn(upperArmL, -25f * w, fwd); // one arm forward
+                Turn(upperArmR, 35f * w, right); Turn(upperArmR, 55f * w, fwd);   // the other out behind
+                Turn(spine, -12f * w, right);
+                var m = animator.transform;
+                m.rotation = Quaternion.AngleAxis(-48f * w, right) * m.rotation;   // lean back on the slide
+                m.position += Vector3.down * 0.28f * w;
+            }
+            // after a roll the goblin is a bit dizzy for a moment
+            if (dodge == Dodge.None && now < dizzyUntil)
+            {
+                float k = Mathf.Clamp01((dizzyUntil - now) / 0.45f);
+                Turn(spine, Mathf.Sin(now * 20f) * 9f * k, fwd);
+                Turn(spine, Mathf.Sin(now * 13f + 1f) * 5f * k, Vector3.up);
+            }
+        }
+
+
         private static Vector3 Flat(Vector3 v) { v.y = 0f; return v; }
 
         /// <summary>
@@ -607,6 +743,7 @@ namespace Goblingame.TestScene
             }
             animator.transform.localScale = baseModelScale;
             ApplyJumpPose(Time.deltaTime);
+            ApplyDodgePose();
             if (flinch > 0f)
             {
                 float angle = Mathf.Sin(flinch * Mathf.PI) * 11f;
