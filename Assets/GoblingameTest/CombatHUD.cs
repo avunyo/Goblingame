@@ -49,6 +49,7 @@ namespace Goblingame.TestScene
             }
             var legacy=transform.Find("Health Panel");if(legacy!=null)legacy.gameObject.SetActive(false);
             BuildReticle();
+            BuildPrompt();
             UpdateControlsHint();
             RenderPortraits();
         }
@@ -121,6 +122,26 @@ namespace Goblingame.TestScene
             foreach(var b in reticleBits)b.color=c;
         }
 
+        // ───────────── "press E" prompt ─────────────
+        private Text promptText; private CanvasGroup promptGroup;
+        private readonly Dictionary<string,Texture> portraitsById=new Dictionary<string,Texture>();
+        private void BuildPrompt()
+        {
+            var rt=new GameObject("Interaction Prompt",typeof(RectTransform)).GetComponent<RectTransform>();rt.SetParent(transform,false);
+            rt.anchorMin=rt.anchorMax=new Vector2(.5f,0f);rt.pivot=new Vector2(.5f,0f);rt.anchoredPosition=new Vector2(0,170);rt.sizeDelta=new Vector2(900,56);
+            var back=rt.gameObject.AddComponent<Image>();back.color=new Color(.04f,.04f,.05f,.72f);back.raycastTarget=false;
+            promptGroup=rt.gameObject.AddComponent<CanvasGroup>();promptGroup.alpha=0f;promptGroup.blocksRaycasts=false;
+            var t=new GameObject("Text",typeof(RectTransform)).GetComponent<RectTransform>();t.SetParent(rt,false);t.anchorMin=Vector2.zero;t.anchorMax=Vector2.one;t.offsetMin=t.offsetMax=Vector2.zero;
+            promptText=t.gameObject.AddComponent<Text>();promptText.font=font;promptText.fontSize=26;promptText.alignment=TextAnchor.MiddleCenter;promptText.color=Cream;promptText.raycastTarget=false;
+        }
+        private void UpdatePrompt()
+        {
+            if(promptGroup==null)return;
+            string text=Interaction.Current;
+            if(text!=null)promptText.text=text;
+            promptGroup.alpha=Mathf.MoveTowards(promptGroup.alpha,text!=null?1f:0f,Time.unscaledDeltaTime*6f);
+        }
+
         // ───────────── floating numbers ─────────────
         private void OnNumber(Vector3 world,float amount,CombatEvents.Kind kind,bool onPlayer)
         {
@@ -139,6 +160,7 @@ namespace Goblingame.TestScene
             {
                 case CombatEvents.Kind.Parried:p.text.text="ПАРИРОВАНО!";p.text.color=Gold;p.text.fontSize=34;p.life=1.1f;break;
                 case CombatEvents.Kind.Blocked:p.text.text="БЛОК  -"+Mathf.CeilToInt(amount);p.text.color=new Color(.75f,.8f,.85f);p.text.fontSize=24;break;
+                case CombatEvents.Kind.Reward:p.text.text="+"+Mathf.CeilToInt(amount)+" ОПЫТА";p.text.color=new Color(.78f,.55f,1f);p.text.fontSize=30;p.life=1.4f;break;
                 case CombatEvents.Kind.Dodged:p.text.text="УКЛОН!";p.text.color=new Color(.55f,.9f,1f);p.text.fontSize=28;p.life=.8f;break;
                 case CombatEvents.Kind.Heal:p.text.text="+"+Mathf.CeilToInt(amount);p.text.color=new Color(.45f,.9f,.3f);p.text.fontSize=26;break;
                 default:
@@ -178,6 +200,7 @@ namespace Goblingame.TestScene
                 Cursor.lockState=bestiary.activeSelf?CursorLockMode.None:CursorLockMode.Locked;Cursor.visible=bestiary.activeSelf;
             }
             UpdatePopups();
+            UpdatePrompt();
             if(player==null)return;
             UpdateReticle();
 
@@ -225,7 +248,13 @@ namespace Goblingame.TestScene
                 target=selected.Health;
                 targetName.text=selected.displayName.ToUpperInvariant();
                 if(targetLevel!=null)targetLevel.text=selected.level.ToString();
-                SetPortrait(portraits.TryGetValue(selected,out var tex)?tex:null);
+                if(!portraits.TryGetValue(selected,out var tex))
+                {
+                    // mobs that crawled out of a lair: reuse the portrait of their kind, or shoot one now
+                    if(string.IsNullOrEmpty(selected.id)||!portraitsById.TryGetValue(selected.id,out tex))tex=selected.portrait!=null?selected.portrait:PortraitStudio.Render(selected.transform,256,256,true);
+                    if(tex!=null){portraits[selected]=tex;if(!string.IsNullOrEmpty(selected.id))portraitsById[selected.id]=tex;}
+                }
+                SetPortrait(tex);
             }
             else if(dummy!=null&&Vector3.Distance(dummy.transform.position,player.transform.position)<4f)
             {
@@ -248,7 +277,7 @@ namespace Goblingame.TestScene
             var t=controls.GetComponent<Text>();if(t==null)return;
             t.text="WASD — движение   Shift — бег   Пробел — прыжок   Мышь — камера   Колесо — зум\n"+
                    "ЛКМ — серия ударов (с бега — рывок, в прыжке — удар с воздуха)   Q — удар головой, затем ЛКМ продолжает\n"+
-                   "ПКМ — блок (вовремя = парирование)   F / СКМ — фокус (резко дёрни мышь, чтобы отвести)   R — встать   Tab — противники";
+                   "ПКМ — блок (вовремя = парирование)   F / СКМ — фокус   R — уклонение (на бегу — подкат) / встать   E — сундук, рунный круг   Tab — противники";
             t.fontSize=16;
         }
     }

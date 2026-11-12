@@ -15,7 +15,7 @@ namespace Goblingame.TestScene
     /// <summary>Global combat feed (damage numbers, camera shake, hit-stop).</summary>
     public static class CombatEvents
     {
-        public enum Kind { Damage, Blocked, Parried, Heal, Dodged }
+        public enum Kind { Damage, Blocked, Parried, Heal, Dodged, Reward }
         public static event Action<Vector3, float, Kind, bool> Number;
         public static void Raise(Vector3 at, float amount, Kind kind, bool onPlayer) => Number?.Invoke(at, amount, kind, onPlayer);
     }

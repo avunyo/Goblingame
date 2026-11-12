@@ -118,6 +118,12 @@ namespace Goblingame.TestScene
         public bool IsDiving => diving;
         public float Health => health;
         public float MaxHealth => maxHealth;
+        /// <summary>Restores health (campfire, chest); returns how much was actually healed.</summary>
+        public float Heal(float amount)
+        {
+            if (!ready || IsDead || amount <= 0f) return 0f;
+            float before = health; health = Mathf.Min(maxHealth, health + amount); return health - before;
+        }
         public bool HasFacing { get; private set; }
         public Vector3 FacingDirection { get; private set; }
 

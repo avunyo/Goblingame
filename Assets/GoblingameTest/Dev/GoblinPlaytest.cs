@@ -152,7 +152,8 @@ namespace Goblingame.TestScene.Dev
                     foreach (var r in rs) { var d = r.bounds.center - c0; d.y = 0; if (d.magnitude > fd) { fd = d.magnitude; far = r; } }
                     Line("info: farthest part " + far.name + " at " + fd.ToString("0.00") + " m, parent " + far.transform.parent.name + " localRot " + far.transform.parent.localEulerAngles.ToString("0"));
                 }
-                Check(Mathf.Abs(b.min.y - e.transform.position.y) < 0.3f, e.displayName + " stands on the ground (feet at " + (b.min.y - e.transform.position.y).ToString("0.00") + ")");
+                Check(Mathf.Abs(b.min.y - e.transform.position.y) < 0.5f,   // a low-swinging hammer may dip a little
+                     e.displayName + " stands on the ground (feet at " + (b.min.y - e.transform.position.y).ToString("0.00") + ")");
                 var ea = e.visual != null ? e.visual.GetComponent<Animator>() : null;
                 Check(ea != null && ea.runtimeAnimatorController != null && ea.runtimeAnimatorController.animationClips.Length >= 6,
                     e.displayName + " has keyframed clips (" + (ea != null && ea.runtimeAnimatorController != null ? ea.runtimeAnimatorController.animationClips.Length : 0) + ")");
@@ -602,21 +603,118 @@ namespace Goblingame.TestScene.Dev
                 foreach (var o in others) o.gameObject.SetActive(true);
                 e.gameObject.SetActive(false);
             }
-            // swamp region views
-            var swamp = GameObject.Find("Swamp World");
-            if (swamp != null)
+            // ── the world: mood shots and gameplay places
+            var worldRoot = GameObject.Find("Twilight World");
+            if (worldRoot != null)
             {
-                var cam = Camera.main.transform; Vector3 c = combat.transform.position;
-                var hut = swamp.transform.Find("Mud-Dome Hut"); var walk = swamp.transform.Find("Boardwalk");
-                var views = new List<(Vector3 pos, Vector3 look, string name)>
+                var cam = Camera.main.transform;
+                combat.gameObject.SetActive(true);
+                Vector3 home = (Vector3)Get(combat, "spawnPosition");
+                Teleport(home, home + Vector3.forward);
+                yield return new WaitForSecondsRealtime(0.3f);
+                Check(worldRoot.GetComponentsInChildren<Renderer>().Length > 1500, "World built (" + worldRoot.GetComponentsInChildren<Renderer>().Length + " renderers)");
+
+                // mood shots from goblin height and from above
+                var looks = new List<(Vector3 pos, Vector3 look, string name)>
                 {
-                    (c + new Vector3(0, 45, -70), c + new Vector3(0, 0, 10), "16_swamp_overview"),
-                    (c + new Vector3(30, 4, -30), c + new Vector3(-10, 1, 10), "16_swamp_ground"),
+                    (home + new Vector3(0, 55, -85), home + new Vector3(0, 0, 15), "16_world_overview"),
+                    (home + new Vector3(28, 2.2f, -30), home + new Vector3(60, 6, -75), "16_world_forest_a"),
+                    (home + new Vector3(-30, 2.5f, 26), home + new Vector3(-70, 7, 60), "16_world_forest_b"),
+                    (home + new Vector3(-6, 3.5f, -14), home + new Vector3(9, 1, -12), "16_world_arena_edge"),
                 };
-                if (hut != null) views.Add((hut.position + hut.forward * 9f + Vector3.up * 2.5f + hut.right * 3f, hut.position + Vector3.up * 1.5f, "16_swamp_hut"));
-                if (walk != null && walk.childCount > 4) { var a = walk.GetChild(2).position; var b = walk.GetChild(walk.childCount - 1).position; views.Add((a - (b - a).normalized * 4f + Vector3.up * 2.2f, b + Vector3.up * .5f, "16_swamp_boardwalk")); }
-                foreach (var v in views) { cam.position = v.pos; cam.LookAt(v.look); yield return new WaitForSecondsRealtime(0.2f); yield return Shot(v.name); }
-                Check(swamp.GetComponentsInChildren<Renderer>().Length > 300, "Swamp region built (" + swamp.GetComponentsInChildren<Renderer>().Length + " renderers)");
+                foreach (var v in looks) { cam.position = v.pos; cam.LookAt(v.look); yield return new WaitForSecondsRealtime(0.2f); yield return Shot(v.name); }
+
+                // campfire heals
+                var fire = worldRoot.GetComponentInChildren<Campfire>();
+                if (fire != null)
+                {
+                    Set(combat, "health", 60f);
+                    Teleport(fire.transform.position + new Vector3(1.9f, .2f, 0), fire.transform.position);
+                    cam.position = fire.transform.position + new Vector3(4.5f, 2.6f, -4.5f); cam.LookAt(fire.transform.position + Vector3.up * 1.1f);
+                    yield return new WaitForSecondsRealtime(1.6f);
+                    Check(combat.Health > 75f, "Campfire heals (60 → " + combat.Health.ToString("0") + " in 1.6 s)");
+                    yield return Shot("17_campfire");
+                }
+
+                // oak stump lair: mobs crawl out when the goblin comes close
+                var stump = worldRoot.GetComponentsInChildren<MobLair>().FirstOrDefault(l => l.name.Contains("Stump"));
+                if (stump != null)
+                {
+                    int before = EnemyActor.All.Count;
+                    Vector3 mouth = stump.mouth.position, outward = stump.mouth.forward;
+                    cam.position = mouth + outward * 13f + Vector3.up * 5f + Vector3.Cross(Vector3.up, outward) * 5f; cam.LookAt(mouth + Vector3.up * 1.5f);
+                    Teleport(mouth + outward * 20f, mouth);
+                    yield return new WaitForSecondsRealtime(0.3f);
+                    yield return Shot("17_stump_asleep");
+                    Teleport(mouth + outward * 7f, mouth);
+                    for (float t = 0; t < 6f && stump.Spawned == 0; t += Time.unscaledDeltaTime) yield return null;
+                    Check(stump.Spawned > 0, "Stump lair wakes and a mob crawls out");
+                    yield return new WaitForSecondsRealtime(0.45f);
+                    yield return Shot("17_stump_emerging");
+                    yield return new WaitForSecondsRealtime(4.5f);
+                    Check(EnemyActor.All.Count > before && stump.AliveCount > 0, "Lair mobs join the fight (" + stump.AliveCount + " alive, " + stump.Spawned + " spawned)");
+                    yield return Shot("17_stump_mobs");
+                    foreach (var e in EnemyActor.All.ToArray()) if (e != null && !e.respawns && !e.Health.IsDead) e.Health.TakeHit(new HitInfo { damage = 9999, source = combat.transform.position });
+                    Set(combat, "health", combat.MaxHealth);
+                }
+
+                // house: roof and walls fade when inside, ambush, chest
+                var houses = worldRoot.GetComponentsInChildren<HouseDungeon>();
+                var houseA = houses.FirstOrDefault(h => h.GetComponentInChildren<TeleportPad>() == null);
+                if (houseA != null)
+                {
+                    var ht = houseA.transform;
+                    Teleport(ht.position + ht.forward * 12f, ht.position);
+                    cam.position = ht.position + ht.forward * 15f + ht.right * 8f + Vector3.up * 6f; cam.LookAt(ht.position + Vector3.up * 2.5f);
+                    yield return new WaitForSecondsRealtime(0.4f);
+                    Check(!houseA.PlayerInside && houseA.Alpha > .95f, "House is solid from outside");
+                    yield return Shot("17_house_outside");
+                    Teleport(ht.position + ht.forward * 1.2f + Vector3.up * .2f, ht.position - ht.forward * 3f);
+                    yield return new WaitForSecondsRealtime(1.0f);
+                    Check(houseA.PlayerInside && houseA.Alpha < .2f, "Inside the house the roof and walls fade (alpha " + houseA.Alpha.ToString("0.00") + ")");
+                    cam.position = ht.position + ht.forward * 9f + ht.right * 5f + Vector3.up * 9f; cam.LookAt(ht.position + Vector3.up * .8f);
+                    var ambush = houseA.GetComponentInChildren<MobLair>();
+                    for (float t = 0; t < 5f && ambush != null && ambush.Spawned < 2; t += Time.unscaledDeltaTime) yield return null;
+                    Check(ambush != null && ambush.Spawned > 0, "House ambush springs (" + (ambush != null ? ambush.Spawned : 0) + " mobs)");
+                    yield return new WaitForSecondsRealtime(0.6f);
+                    yield return Shot("17_house_inside");
+                    foreach (var e in EnemyActor.All.ToArray()) if (e != null && !e.respawns && !e.Health.IsDead) e.Health.TakeHit(new HitInfo { damage = 9999, source = combat.transform.position });
+                    var chest = houseA.GetComponentInChildren<Chest>();
+                    var prog = combat.GetComponent<PlayerProgression>(); int xpBefore = prog != null ? prog.Experience + prog.Level * 1000 : 0;
+                    if (chest != null) chest.Open();
+                    yield return new WaitForSecondsRealtime(0.7f);
+                    Check(chest != null && chest.IsOpen && (prog == null || prog.Experience + prog.Level * 1000 > xpBefore), "Chest opens and pays experience");
+                    yield return Shot("17_house_chest_open");
+                    Teleport(ht.position + ht.forward * 12f, ht.position);
+                    yield return new WaitForSecondsRealtime(1.0f);
+                    Check(houseA.Alpha > .95f, "House turns solid again after leaving");
+                }
+
+                // rune circle → dungeon chamber → back
+                var pad = worldRoot.GetComponentsInChildren<TeleportPad>().FirstOrDefault(p => p.GetComponentInParent<HouseDungeon>() != null);
+                if (pad != null && pad.target != null)
+                {
+                    Set(combat, "health", combat.MaxHealth);
+                    Teleport(pad.transform.position + pad.transform.forward * 1.2f + Vector3.up * .2f, pad.transform.position);
+                    yield return new WaitForSecondsRealtime(0.5f);
+                    float topY = combat.transform.position.y;
+                    pad.Use();
+                    yield return new WaitForSecondsRealtime(0.4f);
+                    Check(combat.transform.position.y < topY - 40f, "Rune circle takes the goblin down into the dungeon (y " + combat.transform.position.y.ToString("0") + ")");
+                    var room = pad.target.transform.parent;
+                    cam.position = room.position + new Vector3(7f, 12f, 13f); cam.LookAt(room.position + new Vector3(0, 0, -2f));
+                    var crypt = room.GetComponentInChildren<MobLair>();
+                    for (float t = 0; t < 6f && crypt != null && crypt.Spawned == 0; t += Time.unscaledDeltaTime) yield return null;
+                    Check(crypt != null && crypt.Spawned > 0, "Dungeon lair releases its guards");
+                    yield return new WaitForSecondsRealtime(1.5f);
+                    Check(combat.transform.position.y > room.position.y - 1f, "Goblin stands on the dungeon floor");
+                    yield return Shot("17_dungeon");
+                    foreach (var e in EnemyActor.All.ToArray()) if (e != null && !e.respawns && !e.Health.IsDead) e.Health.TakeHit(new HitInfo { damage = 9999, source = combat.transform.position });
+                    yield return new WaitForSecondsRealtime(1.1f);
+                    pad.target.Use();
+                    yield return new WaitForSecondsRealtime(0.4f);
+                    Check(Mathf.Abs(combat.transform.position.y - topY) < 3f, "The second circle brings the goblin back up");
+                }
             }
         }
 

@@ -61,6 +61,8 @@ namespace Goblingame.TestScene
         }
 
         public void Shake(float amount) { shake = Mathf.Max(shake, amount); }
+        /// <summary>Jump straight to the target (after a teleport) instead of flying across the map.</summary>
+        public void Snap() { if (target == null) return; pivot = target.position + lookOffset; pivotVelocity = Vector3.zero; locked = null; Place(0f); }
 
         private void Start()
         {
@@ -168,6 +170,7 @@ namespace Goblingame.TestScene
             foreach (var hit in Physics.SphereCastAll(origin, 0.25f, back, dist, ~0, QueryTriggerInteraction.Ignore))
             {
                 if (hit.collider is CharacterController || hit.collider.GetComponentInParent<CharacterController>() != null) continue;
+                if (hit.collider.GetComponentInParent<CameraIgnore>() != null) continue;   // house / dungeon walls fade instead
                 if (hit.distance > 0f && hit.distance < free) free = hit.distance;
             }
             Vector3 pos = origin + back * Mathf.Max(0.6f, free);

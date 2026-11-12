@@ -27,6 +27,8 @@ namespace Goblingame.TestScene
         public float attackCooldown=1.0f;
         public float leash=16f;
         public float respawnDelay=15f;
+        [Tooltip("Lair mobs do not come back: they sink away after dying.")]
+        public bool respawns=true;
 
         public static readonly List<EnemyActor> All=new List<EnemyActor>();
         private static EnemyActor token;
@@ -126,15 +128,34 @@ namespace Goblingame.TestScene
         private void Engage(){if(state==State.Patrol||state==State.Return){state=State.Chase;alertPop=1f;}}
         private void ReleaseToken(){if(token==this)token=null;}
 
+        // crawling out of a lair: grow from small while walking to the given spot, then attack
+        private bool emerging;private Vector3 emergeTo;private float emergeT;
+        public void Emerge(Vector3 to){emerging=true;emergeTo=to;emergeT=0f;}
+
         private void OnDeath()
         {
-            ReleaseToken();state=State.Dead;timer=respawnDelay;SetWalking(false,0f);stride=0f;
+            ReleaseToken();state=State.Dead;timer=respawns?respawnDelay:6f;SetWalking(false,0f);stride=0f;
             var xp=player!=null?player.GetComponent<PlayerProgression>():null;if(xp!=null)xp.AddExperience(experienceReward);
         }
 
         private void Update()
         {
             if(health==null||player==null)return;
+            if(emerging&&state!=State.Dead)
+            {
+                emergeT+=Time.deltaTime;
+                Vector3 go=emergeTo-transform.position;go.y=0;
+                if(go.magnitude<.25f||emergeT>2.2f){emerging=false;home=emergeTo;destination=home;state=State.Chase;alertPop=1f;}
+                else
+                {
+                    Face(go,500f);
+                    if(controller.isGrounded&&vertical<0)vertical=-2;vertical-=20*Time.deltaTime;
+                    controller.Move((go.normalized*Mathf.Max(walkSpeed*1.6f,2.2f)+Vector3.up*vertical)*Time.deltaTime);
+                    walking=true;walkRate=1.4f;
+                    Pose(Time.deltaTime);Animate();
+                    return;
+                }
+            }
             float dt=Time.deltaTime;
             flash=Mathf.MoveTowards(flash,0f,dt*4f);alertPop=Mathf.MoveTowards(alertPop,0f,dt*1.5f);
             if(state==State.Dead){UpdateDead(dt);Pose(dt);Animate();return;}
@@ -250,6 +271,7 @@ namespace Goblingame.TestScene
         private void UpdateDead(float dt)
         {
             controller.enabled=false;timer-=dt;
+            if(timer<=0f&&!respawns){Destroy(gameObject);return;}
             if(timer<=0f)
             {
                 transform.position=home;visual.localRotation=restRotation;visual.localPosition=restPosition;visual.localScale=restScale;
@@ -289,7 +311,8 @@ namespace Goblingame.TestScene
             visual.rotation=Quaternion.AngleAxis(lean,transform.right)*Quaternion.AngleAxis(roll,transform.forward)*visual.rotation;
             visual.position+=jitter+Vector3.down*sink+Vector3.up*bob;
             float squash=1f+.1f*flash;
-            visual.localScale=new Vector3(restScale.x*squash,restScale.y/squash*(1f+breathe),restScale.z*squash);
+            float grow=emerging?Mathf.SmoothStep(.25f,1f,Mathf.Clamp01(emergeT/.8f)):1f;
+            visual.localScale=new Vector3(restScale.x*squash,restScale.y/squash*(1f+breathe),restScale.z*squash)*grow;
         }
 
         private void LateUpdate()

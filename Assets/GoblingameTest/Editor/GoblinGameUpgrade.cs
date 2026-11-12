@@ -85,6 +85,7 @@ namespace Goblingame.TestScene.Editor
             var gc = player != null ? player.GetComponent<GoblinCombat>() : null;
             if (gc != null) { var so = new SerializedObject(gc); var f = so.FindProperty("airStrideTime"); if (f != null) { f.floatValue = 0.13f; so.ApplyModifiedProperties(); } }
             int replaced = UpgradeEnemies(scene);
+            SwampBuilder.RefreshTemplates(scene);
 
             EditorSceneManager.MarkSceneDirty(scene);
             AssetDatabase.SaveAssets();
@@ -122,7 +123,8 @@ namespace Goblingame.TestScene.Editor
         private static int UpgradeEnemies(Scene scene)
         {
             int count = 0;
-            var actors = scene.GetRootGameObjects().SelectMany(r => r.GetComponentsInChildren<EnemyActor>(true)).ToArray();
+            // only the live cast; the disabled lair templates are re-cloned from it afterwards
+            var actors = scene.GetRootGameObjects().SelectMany(r => r.GetComponentsInChildren<EnemyActor>(true)).Where(x => x.gameObject.activeInHierarchy).ToArray();
             foreach (var actor in actors)
             {
                 var a = Cast.FirstOrDefault(c => c.name == actor.displayName || c.id == actor.id || actor.gameObject.name == c.name);
