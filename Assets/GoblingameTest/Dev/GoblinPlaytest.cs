@@ -25,10 +25,12 @@ namespace Goblingame.TestScene.Dev
         private static void Boot()
         {
             if (!File.Exists(Flag)) return;
+            Mode = File.ReadAllText(Flag).Trim();
             File.Delete(Flag);
             new GameObject("Goblin Playtest").AddComponent<GoblinPlaytest>();
         }
 
+        private static string Mode = "run";
         private readonly StringBuilder report = new StringBuilder();
         private readonly List<string> errors = new List<string>();
         private int pass, fail;
@@ -127,6 +129,7 @@ namespace Goblingame.TestScene.Dev
             Check(view != null, "Camera ThirdPersonFollow present");
             Check(hud != null, "CombatHUD present");
             if (combat == null || view == null) { Finish(); yield break; }
+            if (Mode == "stance") { yield return StanceGallery(); Finish(); yield break; }
             anim = (Animator)Get(combat, "animator");
             Check((bool)Get(combat, "ready"), "Combat ready (Punch state found)");
             Check((bool)Get(combat, "hasIdleTime"), "Animator has IdleTime parameter");
@@ -484,6 +487,43 @@ namespace Goblingame.TestScene.Dev
             yield return InventoryChecks(spawn);
             yield return PoseGallery(enemies);
             Finish();
+        }
+
+        /// <summary>Quick visual pass: relaxed and armed stances from two sides, plus the HUD.</summary>
+        private IEnumerator StanceGallery()
+        {
+            var inv = combat.GetComponent<GoblinInventory>();
+            foreach (var e in EnemyActor.All.ToArray()) if (e != null) e.gameObject.SetActive(false);
+            Set(combat, "lastCombatTime", -100f);
+            Vector3 home = combat.transform.position;
+            Teleport(home, home + Vector3.forward);
+            foreach (var d in new[] { Items.Dagger, Items.Club, Items.Cleaver }) if (!inv.Has(d.id)) inv.Add(d, 1, false);
+            inv.Add(Items.Mushroom, 3, false);
+            yield return new WaitForSecondsRealtime(0.5f);
+            view.enabled = false;
+            var camT = Camera.main.transform;
+            var poses = new (string weapon, bool relaxed)[] { ("fists", true), ("dagger", true), ("club", true), ("dagger", false), ("club", false), ("cleaver", false) };
+            foreach (var (weapon, relaxed) in poses)
+            {
+                inv.Equip(weapon, 0); combat.ForceRelaxed = relaxed;
+                yield return new WaitForSecondsRealtime(1.3f);
+                Vector3 f = combat.transform.forward, r = combat.transform.right, chest = combat.transform.position + Vector3.up * .75f;
+                string tag = (relaxed ? "relaxed_" : "guard_") + weapon;
+                Check(relaxed ? combat.RelaxWeight > .9f : (weapon == "fists" || combat.GuardWeight > .9f), "Stance " + tag + " (relax " + combat.RelaxWeight.ToString("0.00") + ", guard " + combat.GuardWeight.ToString("0.00") + ")");
+                camT.position = chest + f * 2.1f + r * .9f + Vector3.up * .25f; camT.LookAt(chest);
+                yield return Shot("21_" + tag + "_front");
+                camT.position = chest + r * 2.3f + f * .3f + Vector3.up * .15f; camT.LookAt(chest);
+                yield return Shot("21_" + tag + "_side");
+            }
+            combat.ForceRelaxed = null;
+            view.enabled = true; view.Snap();
+            inv.Cycle(1);
+            yield return new WaitForSecondsRealtime(0.15f);
+            yield return Shot("21_hud_swap");
+            yield return new WaitForSecondsRealtime(0.8f);
+            yield return Shot("21_hud");
+            var ihud = FindFirstObjectByType<InventoryHUD>();
+            if (ihud != null) { ihud.ToggleScreen(true); yield return new WaitForSecondsRealtime(0.3f); yield return Shot("21_bag"); ihud.ToggleScreen(false); }
         }
 
         /// <summary>Belt, pickups, weapons in the hand and their damage, eating, the weapon arc and the bag screen.</summary>

@@ -16,6 +16,7 @@ namespace Goblingame.TestScene
 
         private static readonly Color Cream = new Color(.93f, .87f, .74f), Gold = new Color(1f, .78f, .3f), Panel = new Color(.05f, .055f, .07f, .82f),
                                       HeartRed = new Color(.92f, .2f, .22f), XpGreen = new Color(.5f, .95f, .3f);
+        private static readonly Color FrameIdle = new Color(1f, .85f, .6f, 0f), Ember = new Color(1f, .55f, .45f);
         private const float SlotSize = 78f, SlotGap = 8f, ArcRadius = 205f, ArcStep = 30f, ArcCentre = 135f;
 
         private Font font; private Canvas canvas; private PlayerProgression progression; private CombatHUD combatHud;
@@ -37,6 +38,7 @@ namespace Goblingame.TestScene
         private readonly List<(SlotView view, int index, int copy)> arcSlots = new List<(SlotView, int, int)>();
         private List<ItemDef> arcWeapons = new List<ItemDef>();
         private float arcPos, arcVel, arcTarget, arcActive = 1f, swapT = 1f; private int swapDir;
+        private Image hubAura; private RectTransform hubRunes, hubInner; private RectTransform[] hubSparks;
 
         // ───────────── pickup feed ─────────────
         private sealed class FeedRow { public RectTransform root; public CanvasGroup group; public RawImage icon; public Text text; public float age = 99f; public string id; public int count; }
@@ -94,10 +96,10 @@ namespace Goblingame.TestScene
         {
             var v = new SlotView();
             v.root = Rect(name, parent, new Vector2(.5f, .5f), pos, new Vector2(size, size));
-            v.glow = Img("Glow", v.root, Vector2.zero, new Vector2(size + 18, size + 18), UISprites.Rounded, new Color(Gold.r, Gold.g, Gold.b, 0f));
-            v.back = Img("Back", v.root, Vector2.zero, new Vector2(size, size), UISprites.Rounded, Panel);
+            v.glow = Img("Glow", v.root, Vector2.zero, new Vector2(size * 1.9f, size * 1.9f), TwilightUI.Glow, new Color(Ember.r, Ember.g, Ember.b, 0f));
+            v.back = Img("Back", v.root, Vector2.zero, new Vector2(size, size), TwilightUI.Slot, Color.white);
             v.icon = Rect("Icon", v.root, new Vector2(.5f, .5f), Vector2.zero, new Vector2(size * .82f, size * .82f)).gameObject.AddComponent<RawImage>(); v.icon.raycastTarget = false;
-            v.frame = Img("Frame", v.root, Vector2.zero, new Vector2(size, size), UISprites.RoundedFrame, new Color(Cream.r, Cream.g, Cream.b, .25f));
+            v.frame = Img("Frame", v.root, Vector2.zero, new Vector2(size + 4, size + 4), UISprites.RoundedFrame, FrameIdle);
             v.count = Txt("Count", v.root, new Vector2(size * .5f - 8, -size * .5f + 14), new Vector2(60, 24), 20, Color.white, TextAnchor.MiddleRight);
             v.count.rectTransform.pivot = new Vector2(1, .5f);
             if (number != null) v.number = Txt("Key", v.root, new Vector2(-size * .5f + 12, size * .5f - 12), new Vector2(20, 20), 14, new Color(Cream.r, Cream.g, Cream.b, .7f), TextAnchor.MiddleCenter);
@@ -116,7 +118,8 @@ namespace Goblingame.TestScene
         {
             var root = Rect("Belt HUD", transform, new Vector2(.5f, 0f), new Vector2(0, 0), new Vector2(900, 240), new Vector2(.5f, 0f));
             float width = GoblinInventory.HotbarSize * SlotSize + (GoblinInventory.HotbarSize - 1) * SlotGap;
-            var strip = Img("Belt Strip", root, new Vector2(0, 22 + SlotSize / 2f), new Vector2(width + 16, SlotSize + 16), UISprites.Rounded, new Color(0, 0, 0, .35f));
+            Img("Belt Glow", root, new Vector2(0, 22 + SlotSize / 2f), new Vector2(width + 260, SlotSize + 150), TwilightUI.Glow, new Color(.55f, .25f, .7f, .35f), new Vector2(.5f, 0f));
+            var strip = Img("Belt Strip", root, new Vector2(0, 22 + SlotSize / 2f), new Vector2(width + 30, SlotSize + 30), TwilightUI.Strip, Color.white);
             strip.rectTransform.anchorMin = strip.rectTransform.anchorMax = new Vector2(.5f, 0f);
             belt = new SlotView[GoblinInventory.HotbarSize];
             for (int i = 0; i < belt.Length; i++)
@@ -143,12 +146,13 @@ namespace Goblingame.TestScene
             const float size = 138f;
             orbRoot = Rect("Life Flask", root, new Vector2(.5f, 0f), new Vector2(-beltWidth / 2f - 26f - size / 2f, 18f + size / 2f), new Vector2(size, size));
             // experience arc (behind), 3/4 of a circle opening at the bottom-right
-            var track = Img("XP Track", orbRoot, Vector2.zero, new Vector2(size + 34, size + 34), UISprites.Ring, new Color(0, 0, 0, .55f));
-            xpArc = Img("XP Arc", orbRoot, Vector2.zero, new Vector2(size + 34, size + 34), UISprites.Ring, XpViolet);
+            Img("Flask Aura", orbRoot, Vector2.zero, new Vector2(size * 2.2f, size * 2.2f), TwilightUI.Glow, new Color(.6f, .3f, .8f, .45f));
+            var track = Img("XP Track", orbRoot, Vector2.zero, new Vector2(size + 34, size + 34), UISprites.Ring, new Color(.03f, .02f, .07f, .75f));
+            xpArc = Img("XP Arc", orbRoot, Vector2.zero, new Vector2(size + 40, size + 40), TwilightUI.ArcBand, Color.white);
             foreach (var img in new[] { track, xpArc }) { img.type = Image.Type.Filled; img.fillMethod = Image.FillMethod.Radial360; img.fillOrigin = (int)Image.Origin360.Bottom; img.fillClockwise = true; img.rectTransform.localRotation = Quaternion.Euler(0, 0, -45f); }
             track.fillAmount = .75f;
             Img("Flask Shadow", orbRoot, new Vector2(0, -4), new Vector2(size + 6, size + 6), UISprites.Circle, new Color(0, 0, 0, .5f));
-            Img("Flask Glass", orbRoot, Vector2.zero, new Vector2(size, size), UISprites.Circle, new Color(.05f, .06f, .08f, .9f));
+            Img("Flask Glass", orbRoot, Vector2.zero, new Vector2(size, size), TwilightUI.Hub, new Color(.55f, .5f, .65f, 1f));
             orbGhost = Rect("Ghost", orbRoot, new Vector2(.5f, .5f), Vector2.zero, new Vector2(size, size)).gameObject.AddComponent<LiquidOrb>();
             orbGhost.deep = new Color(.55f, .45f, .45f); orbGhost.surface = new Color(.9f, .8f, .75f); orbGhost.foam = new Color(1f, .95f, .9f); orbGhost.raycastTarget = false; orbGhost.color = new Color(1, 1, 1, .55f);
             orbLiquid = Rect("Potion", orbRoot, new Vector2(.5f, .5f), Vector2.zero, new Vector2(size, size)).gameObject.AddComponent<LiquidOrb>(); orbLiquid.raycastTarget = false;
@@ -157,7 +161,7 @@ namespace Goblingame.TestScene
             orbFlash = Img("Flash", orbRoot, Vector2.zero, new Vector2(size * .9f, size * .9f), UISprites.Circle, new Color(1, 1, 1, 0));
             Img("Glass Shine", orbRoot, new Vector2(-30, 34), new Vector2(34, 20), UISprites.Circle, new Color(1, 1, 1, .22f)).rectTransform.localRotation = Quaternion.Euler(0, 0, 35f);
             Img("Glass Glint", orbRoot, new Vector2(-44, 14), new Vector2(8, 8), UISprites.Circle, new Color(1, 1, 1, .35f));
-            orbRim = Img("Flask Rim", orbRoot, Vector2.zero, new Vector2(size + 8, size + 8), UISprites.Ring, new Color(.55f, .44f, .3f));
+            orbRim = Img("Flask Rim", orbRoot, Vector2.zero, new Vector2(size + 12, size + 12), TwilightUI.MetalRing, Color.white);
             Img("Flask Rim Inner", orbRoot, Vector2.zero, new Vector2(size - 6, size - 6), UISprites.ThinRing, new Color(0, 0, 0, .6f));
             // a cork-like cap on top
             Img("Cap", orbRoot, new Vector2(0, size / 2f + 4), new Vector2(34, 16), UISprites.Rounded, new Color(.45f, .3f, .18f));
@@ -177,7 +181,8 @@ namespace Goblingame.TestScene
         private void BuildArc()
         {
             arcRoot = Rect("Weapon Arc", transform, new Vector2(1f, 0f), new Vector2(-180, 180), new Vector2(10, 10));
-            var track = Img("Arc Track", arcRoot, Vector2.zero, new Vector2(ArcRadius * 2f, ArcRadius * 2f), UISprites.ThinRing, new Color(Cream.r, Cream.g, Cream.b, .3f));
+            hubAura = Img("Hub Aura", arcRoot, Vector2.zero, new Vector2(520, 520), TwilightUI.Glow, new Color(.55f, .25f, .75f, .45f));
+            var track = Img("Arc Track", arcRoot, Vector2.zero, new Vector2(ArcRadius * 2f + 14f, ArcRadius * 2f + 14f), TwilightUI.ArcBand, new Color(1f, 1f, 1f, .85f));
             track.type = Image.Type.Filled; track.fillMethod = Image.FillMethod.Radial360; track.fillOrigin = (int)Image.Origin360.Right; track.fillClockwise = false;
             track.fillAmount = (212f - 58f) / 360f; track.rectTransform.localRotation = Quaternion.Euler(0, 0, 58f);
             // pointer notch at the active spot
@@ -186,9 +191,12 @@ namespace Goblingame.TestScene
             arcSlotsRoot = Rect("Arc Slots", arcRoot, new Vector2(.5f, .5f), Vector2.zero, new Vector2(10, 10));
             // hub: the weapon in hand, big
             Img("Hub Shadow", arcRoot, new Vector2(0, -4), new Vector2(188, 188), UISprites.Circle, new Color(0, 0, 0, .45f));
-            Img("Hub", arcRoot, Vector2.zero, new Vector2(176, 176), UISprites.Circle, Panel);
-            hubRing = Img("Hub Ring", arcRoot, Vector2.zero, new Vector2(176, 176), UISprites.Ring, Gold);
-            Img("Hub Inner Ring", arcRoot, Vector2.zero, new Vector2(150, 150), UISprites.ThinRing, new Color(Cream.r, Cream.g, Cream.b, .18f));
+            hubRunes = Img("Hub Runes", arcRoot, Vector2.zero, new Vector2(232, 232), TwilightUI.Runes, new Color(.8f, .65f, 1f, .55f)).rectTransform;
+            Img("Hub", arcRoot, Vector2.zero, new Vector2(180, 180), TwilightUI.Hub, Color.white);
+            hubRing = Img("Hub Ring", arcRoot, Vector2.zero, new Vector2(186, 186), TwilightUI.MetalRing, Color.white);
+            hubInner = Img("Hub Inner Runes", arcRoot, Vector2.zero, new Vector2(150, 150), TwilightUI.Runes, new Color(1f, .75f, .5f, .22f)).rectTransform;
+            hubSparks = new RectTransform[9];
+            for (int i = 0; i < hubSparks.Length; i++) hubSparks[i] = Img("Spark", arcRoot, Vector2.zero, new Vector2(16, 16), TwilightUI.Star, new Color(1f, .85f, .7f, 0f)).rectTransform;
             hubOld = Rect("Hub Old Icon", arcRoot, new Vector2(.5f, .5f), Vector2.zero, new Vector2(128, 128)).gameObject.AddComponent<RawImage>(); hubOld.raycastTarget = false;
             hubIcon = Rect("Hub Icon", arcRoot, new Vector2(.5f, .5f), Vector2.zero, new Vector2(128, 128)).gameObject.AddComponent<RawImage>(); hubIcon.raycastTarget = false;
             hubName = Txt("Weapon Name", arcRoot, new Vector2(-20, -112), new Vector2(360, 28), 22, Cream, TextAnchor.MiddleCenter);
@@ -209,8 +217,7 @@ namespace Goblingame.TestScene
                 for (int i = 0; i < n; i++)
                 {
                     var v = Slot("Arc " + arcWeapons[i].id, arcSlotsRoot, Vector2.zero, 74f, null);
-                    v.back.sprite = UISprites.Circle; v.back.type = Image.Type.Simple; v.frame.sprite = UISprites.Ring; v.frame.type = Image.Type.Simple;
-                    v.glow.sprite = UISprites.Circle; v.glow.type = Image.Type.Simple;
+                    v.back.sprite = TwilightUI.Orb; v.back.type = Image.Type.Simple; v.frame.sprite = UISprites.Ring; v.frame.type = Image.Type.Simple;
                     v.icon.texture = arcWeapons[i] == Items.Fists ? FistIcon() : ItemIcons.Get(arcWeapons[i]);
                     v.root.gameObject.AddComponent<CanvasGroup>();
                     arcSlots.Add((v, i, copy));
@@ -242,7 +249,7 @@ namespace Goblingame.TestScene
                 if (row == null && feed.Count < 6)
                 {
                     row = new FeedRow { root = Rect("Feed Row", transform, new Vector2(1f, 0f), Vector2.zero, new Vector2(320, 44), new Vector2(1f, .5f)) };
-                    var back = Img("Back", row.root, Vector2.zero, new Vector2(320, 44), UISprites.Rounded, new Color(0, 0, 0, .55f)); back.rectTransform.anchorMin = Vector2.zero; back.rectTransform.anchorMax = Vector2.one; back.rectTransform.sizeDelta = Vector2.zero;
+                    var back = Img("Back", row.root, Vector2.zero, new Vector2(320, 44), TwilightUI.Plate, new Color(1, 1, 1, .92f)); back.rectTransform.anchorMin = Vector2.zero; back.rectTransform.anchorMax = Vector2.one; back.rectTransform.sizeDelta = Vector2.zero;
                     row.icon = Rect("Icon", row.root, new Vector2(1f, .5f), new Vector2(-26, 0), new Vector2(38, 38)).gameObject.AddComponent<RawImage>(); row.icon.raycastTarget = false;
                     row.text = Txt("Text", row.root, new Vector2(-52, 0), new Vector2(260, 30), 20, Cream, TextAnchor.MiddleRight, true, new Vector2(1f, .5f)); row.text.rectTransform.pivot = new Vector2(1f, .5f);
                     row.group = row.root.gameObject.AddComponent<CanvasGroup>();
@@ -346,9 +353,10 @@ namespace Goblingame.TestScene
             {
                 var v = grid[i]; bool equipped = !inventory[i].Empty && inventory[i].id == inventory.Weapon.id;
                 float want = i == hover ? 1.08f : 1f; v.scale = Mathf.Lerp(v.scale, want, 1f - Mathf.Exp(-18f * Time.unscaledDeltaTime)); v.root.localScale = Vector3.one * v.scale;
-                v.frame.color = equipped ? Gold : i == hover ? new Color(Cream.r, Cream.g, Cream.b, .8f) : new Color(Cream.r, Cream.g, Cream.b, .25f);
+                v.frame.color = equipped ? Gold : i == hover ? new Color(Cream.r, Cream.g, Cream.b, .8f) : FrameIdle;
                 v.icon.color = i == dragFrom ? new Color(1, 1, 1, .3f) : Color.white;
-                var gc = v.glow.color; gc.a = equipped ? .28f : 0f; v.glow.color = gc;
+                var lit = equipped || i == hover ? TwilightUI.SlotLit : TwilightUI.Slot; if (v.back.sprite != lit) v.back.sprite = lit;
+                var gc = v.glow.color; gc.a = equipped ? .5f : i == hover ? .3f : 0f; v.glow.color = gc;
             }
         }
 
@@ -437,7 +445,7 @@ namespace Goblingame.TestScene
             orbRoot.localScale = Vector3.one * (1f + pulse + hurtFlash * .06f + healGlow * .04f);
             orbRoot.anchoredPosition = new Vector2(orbRoot.anchoredPosition.x, 18f + 69f) + shake;
             orbFlash.color = new Color(1f, healGlow > hurtFlash ? 1f : .55f, healGlow > hurtFlash ? .7f : .5f, Mathf.Max(hurtFlash * .45f, healGlow * .3f));
-            orbRim.color = Color.Lerp(new Color(.55f, .44f, .3f), Hurt, hurtFlash * .8f + danger * .3f * (1f + Mathf.Sin(Time.unscaledTime * 6f)) * .5f);
+            orbRim.color = Color.Lerp(Color.white, Hurt, hurtFlash * .8f + danger * .3f * (1f + Mathf.Sin(Time.unscaledTime * 6f)) * .5f);
             hpText.text = Mathf.CeilToInt(hp).ToString(); hpMax.text = "/ " + Mathf.CeilToInt(max);
             // bubbles rise through the potion and pop at the surface
             float r = 69f * .9f, level = -r + 2f * r * f;
@@ -472,8 +480,9 @@ namespace Goblingame.TestScene
                 float want = sel ? 1.12f : 1f;
                 v.scale = Mathf.Lerp(v.scale, want, 1f - Mathf.Exp(-16f * dt));
                 v.root.localScale = Vector3.one * v.scale;
-                v.frame.color = sel || equipped ? Gold : new Color(Cream.r, Cream.g, Cream.b, .25f);
-                var gc = v.glow.color; gc.a = Mathf.Lerp(gc.a, sel ? .3f + .08f * Mathf.Sin(Time.unscaledTime * 4f) : 0f, 1f - Mathf.Exp(-10f * dt)); v.glow.color = gc;
+                v.frame.color = sel || equipped ? new Color(Gold.r, Gold.g, Gold.b, .85f) : FrameIdle;
+                var lit = sel || equipped ? TwilightUI.SlotLit : TwilightUI.Slot; if (v.back.sprite != lit) v.back.sprite = lit;
+                var gc = v.glow.color; gc.a = Mathf.Lerp(gc.a, sel ? .55f + .15f * Mathf.Sin(Time.unscaledTime * 4f) : 0f, 1f - Mathf.Exp(-10f * dt)); v.glow.color = gc;
             }
             itemNameTimer -= dt;
             itemNameGroup.alpha = Mathf.MoveTowards(itemNameGroup.alpha, itemNameTimer > 0f ? 1f : 0f, dt * (itemNameTimer > 0f ? 8f : 2f));
@@ -499,8 +508,9 @@ namespace Goblingame.TestScene
                 float sc = Mathf.Lerp(.82f, 1.18f, Mathf.Clamp01(1f - Mathf.Abs(rel)));
                 view.root.localScale = Vector3.one * sc;
                 view.root.GetComponent<CanvasGroup>().alpha = alpha;
-                view.frame.color = isEquipped ? Gold : new Color(Cream.r, Cream.g, Cream.b, .3f);
-                var gc = view.glow.color; gc.a = isEquipped ? .35f : 0f; view.glow.color = gc;
+                view.frame.color = isEquipped ? Gold : FrameIdle;
+                var lit = isEquipped ? TwilightUI.OrbLit : TwilightUI.Orb; if (view.back.sprite != lit) view.back.sprite = lit;
+                var gc = view.glow.color; gc.a = isEquipped ? .6f : 0f; view.glow.color = gc;
                 view.root.gameObject.SetActive(alpha > .01f);
             }
             // hub: the new weapon spins in, the old one spins out
@@ -513,8 +523,21 @@ namespace Goblingame.TestScene
             hubOld.rectTransform.localRotation = Quaternion.Euler(0, 0, -e * 70f * swapDir);
             hubOld.rectTransform.localScale = Vector3.one * Mathf.Lerp(1f, .3f, e);
             hubOld.color = new Color(1, 1, 1, 1f - e);
-            hubRing.color = Color.Lerp(Gold, Color.white, (1f - e) * .7f);
+            hubRing.color = Color.Lerp(Color.white, new Color(1.6f, 1.3f, 1.6f), (1f - e));
             hubRing.rectTransform.localScale = Vector3.one * (1f + Mathf.Sin(e * Mathf.PI) * .06f);
+            // twilight magic: runes turn slowly (and spin up on a swap), the aura breathes, sparks orbit and twinkle
+            float now = Time.unscaledTime;
+            hubRunes.localRotation = Quaternion.Euler(0, 0, now * 9f + (1f - e) * 120f * swapDir);
+            hubInner.localRotation = Quaternion.Euler(0, 0, -now * 14f);
+            hubAura.color = new Color(.55f + .3f * (1f - e), .25f, .75f, .32f + .1f * Mathf.Sin(now * 1.7f) + (1f - e) * .35f);
+            for (int i = 0; i < hubSparks.Length; i++)
+            {
+                float a = now * (.25f + i * .03f) + i * 2.1f, rad = 106f + 22f * Mathf.Sin(now * .7f + i * 1.3f);
+                hubSparks[i].anchoredPosition = new Vector2(Mathf.Cos(a), Mathf.Sin(a)) * rad;
+                float tw = Mathf.Pow(Mathf.Max(0f, Mathf.Sin(now * (1.3f + i * .21f) + i * 4f)), 6f);
+                hubSparks[i].localScale = Vector3.one * (.5f + tw * .9f);
+                hubSparks[i].GetComponent<Image>().color = new Color(1f, .8f + .2f * (i % 2), .7f + .3f * (i % 3 == 0 ? 1 : 0), tw * .95f);
+            }
             arcHint.color = new Color(Cream.r, Cream.g, Cream.b, .7f * (1f - active * .5f) * (arcWeapons.Count > 1 ? 1f : 0f));
         }
 

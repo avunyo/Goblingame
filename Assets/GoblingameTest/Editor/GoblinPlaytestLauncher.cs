@@ -59,15 +59,19 @@ namespace Goblingame.TestScene.Editor
             // pick up edited scripts first; never start Play with stale code
             AssetDatabase.Refresh();
             if (EditorApplication.isCompiling || EditorApplication.isUpdating) return;   // the poll retries after the reload
+            string mode = File.ReadAllText(Request).Trim();
             File.Delete(Request);
-            Run();
+            Run(string.IsNullOrEmpty(mode) ? "run" : mode);
         }
 
         [MenuItem("Goblingame/Run Playtest")]
-        public static void Run()
+        public static void Run() => Run("run");
+
+        /// <summary>mode "run" = full playtest, "stance" = quick pose/HUD gallery.</summary>
+        public static void Run(string mode)
         {
             if (EditorApplication.isPlaying) return;
-            File.WriteAllText(Path.Combine(Root, "Temp/GoblinPlaytest.run"), "run");
+            File.WriteAllText(Path.Combine(Root, "Temp/GoblinPlaytest.run"), mode);
             // keep playing while another window has focus (otherwise the test freezes in the background)
             if (!PlayerSettings.runInBackground) PlayerSettings.runInBackground = true;
             Debug.Log("[Playtest] starting play mode");

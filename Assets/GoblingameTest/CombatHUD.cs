@@ -109,7 +109,7 @@ namespace Goblingame.TestScene
             string[,] keys={{"ЛКМ","удар"},{"ПКМ","блок"},{"Q","головой"},{"R","уклон"},{"Пробел","прыжок"},{"E","действие"},{"Колесо","оружие"},{"I","сумка"},{"F","фокус"},{"Tab","враги"}};
             var list=new GameObject("Key List",typeof(RectTransform)).GetComponent<RectTransform>();list.SetParent(transform,false);
             list.anchorMin=list.anchorMax=list.pivot=new Vector2(0,1);list.anchoredPosition=new Vector2(22,-18);list.sizeDelta=new Vector2(300,130);
-            var back=list.gameObject.AddComponent<Image>();back.sprite=UISprites.Rounded;back.type=Image.Type.Sliced;back.color=new Color(0,0,0,.32f);back.raycastTarget=false;
+            var back=list.gameObject.AddComponent<Image>();back.sprite=TwilightUI.Plate;back.color=new Color(1,1,1,.85f);back.raycastTarget=false;
             int rows=(keys.GetLength(0)+1)/2;
             for(int i=0;i<keys.GetLength(0);i++)
             {

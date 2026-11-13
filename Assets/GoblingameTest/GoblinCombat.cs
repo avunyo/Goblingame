@@ -390,6 +390,43 @@ namespace Goblingame.TestScene
             new[] { new SwingPose(-10f,   35f, -40f,  15f), new SwingPose(-160f, -25f, -10f, -15f), new SwingPose(-170f, -35f, -25f, -18f) }, // rising cut
             new[] { new SwingPose(-175f,  10f, -85f,   5f), new SwingPose(-15f,   0f,  0f,   0f), new SwingPose(-5f,    0f, -10f,   0f) },   // overhead chop
         };
+        // ── stances layered over the idle clip (which is a raised-fists fighting pose):
+        // out of combat the arms hang loose; in combat with a weapon the weapon arm moves out and forward
+
+        private float relaxUpper = 58f, relaxOut = 10f, relaxElbow = 75f, relaxLean = -4f;
+        private float guardRaise = 14f, guardOut = 22f, guardElbow = 62f;
+        private float relaxWeight, guardWeight;
+        /// <summary>0..1, how much the goblin is in the loose, out-of-combat stance.</summary>
+        public float RelaxWeight => relaxWeight;
+        /// <summary>0..1, how much the armed fighting guard is applied.</summary>
+        public float GuardWeight => guardWeight;
+        /// <summary>For tests: force the out-of-combat look (null = automatic).</summary>
+        public bool? ForceRelaxed { get; set; }
+
+        private void ApplyStance(float dt)
+        {
+            bool idle = !IsDead && !attacking && !blocking && dodge == Dodge.None && !diving && gestureClock < 0f &&
+                        (movement == null || !movement.IsAirborne) && Time.time >= recoverUntil;
+            bool calm = ForceRelaxed ?? !InCombat;
+            float still = movement != null ? 1f - Mathf.Clamp01(movement.CurrentSpeed / 1.2f) : 1f;
+            relaxWeight = Mathf.MoveTowards(relaxWeight, idle && calm ? still : 0f, dt * (idle && calm ? 1.8f : 6f));
+            guardWeight = Mathf.MoveTowards(guardWeight, idle && !calm && EquippedWeapon != Items.Fists ? still : 0f, dt * 6f);
+            Vector3 right = transform.right, fwd = transform.forward;
+            float r = Mathf.SmoothStep(0f, 1f, relaxWeight), g = Mathf.SmoothStep(0f, 1f, guardWeight);
+            if (r > 0f)
+            {
+                Turn(spine, relaxLean * r, right);
+                Turn(upperArmL, relaxUpper * r, right); Turn(upperArmR, relaxUpper * r, right);
+                Turn(upperArmL, -relaxOut * r, fwd); Turn(upperArmR, relaxOut * r, fwd);
+                Turn(foreArmL, relaxElbow * r, right); Turn(foreArmR, relaxElbow * r, right);
+            }
+            if (g > 0f)
+            {
+                Turn(upperArmR, guardRaise * g, right); Turn(upperArmR, guardOut * g, fwd);
+                Turn(foreArmR, guardElbow * g, right);
+            }
+        }
+
         private float swingWeight;
         private SwingPose swingNow;
 
@@ -808,6 +845,7 @@ namespace Goblingame.TestScene
             animator.transform.localScale = baseModelScale;
             ApplyJumpPose(Time.deltaTime);
             ApplyDodgePose();
+            ApplyStance(Time.deltaTime);
             ApplyWeaponSwing(Time.deltaTime);
             if (flinch > 0f)
             {

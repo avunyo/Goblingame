@@ -245,7 +245,18 @@ namespace Goblingame.TestScene
         private void FollowHand()
         {
             if (held == null || hand == null) return;
-            held.SetPositionAndRotation(hand.position + hand.rotation * gripOffset, hand.rotation * gripRotation);
+            Quaternion inHand = hand.rotation * gripRotation;
+            if (combat != null)
+            {
+                // relaxed: the blade hangs down and a little back along the leg; on guard it points at the enemy
+                Vector3 up = Vector3.up, fwd = transform.forward, side = transform.right;
+                Quaternion lowered = Quaternion.LookRotation(side, (-up * .85f - fwd * .35f + side * .12f).normalized);
+                Quaternion guard = Quaternion.LookRotation(side, (fwd * .9f + up * .3f + side * .18f).normalized);
+                float r = Mathf.SmoothStep(0f, 1f, combat.RelaxWeight), g = Mathf.SmoothStep(0f, 1f, combat.GuardWeight) * .85f;
+                if (g > 0f) inHand = Quaternion.Slerp(inHand, guard, g);
+                if (r > 0f) inHand = Quaternion.Slerp(inHand, lowered, r);
+            }
+            held.SetPositionAndRotation(hand.position + hand.rotation * gripOffset, inHand);
         }
 
         private void LateUpdate() { FollowHand(); }
