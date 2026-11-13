@@ -6,7 +6,7 @@ using UnityEngine.UI;
 namespace Goblingame.TestScene
 {
     /// <summary>
-    /// Bottom HUD: hearts, experience and the 9-slot belt (Minecraft-style), a weapon arc in the
+    /// Bottom HUD: a life flask with an experience arc next to the 9-slot belt, a weapon arc in the
     /// bottom-right corner that slides when the wheel flips weapons, a pickup feed, and the bag screen (I).
     /// </summary>
     public sealed class InventoryHUD : MonoBehaviour
@@ -27,8 +27,10 @@ namespace Goblingame.TestScene
 
         // ───────────── belt / hearts / xp ─────────────
         private SlotView[] belt;
-        private Image xpFill; private Text levelText, coinText, itemName; private CanvasGroup itemNameGroup; private float itemNameTimer;
-        private Image[] heartFill, heartGhost; private RectTransform[] heartRoot; private float ghostHealth, lastHealth, healWave = 9f, hurtFlash;
+        private Text levelText, coinText, itemName; private CanvasGroup itemNameGroup; private float itemNameTimer;
+        // life flask: green goblin potion that drains, sloshes and bubbles; experience is a violet arc around it
+        private RectTransform orbRoot; private LiquidOrb orbLiquid, orbGhost; private Image xpArc, orbFlash, orbRim; private Text hpText, hpMax;
+        private RectTransform[] bubbles; private float[] bubbleT; private float ghostHealth, lastHealth, hurtFlash, healGlow, shownXp;
 
         // ───────────── weapon arc ─────────────
         private RectTransform arcRoot, arcSlotsRoot; private RawImage hubIcon, hubOld; private Text hubName, hubStats, arcHint; private Image hubRing;
@@ -123,32 +125,50 @@ namespace Goblingame.TestScene
                 belt[i].root.anchorMin = belt[i].root.anchorMax = new Vector2(.5f, 0f);
                 belt[i].root.anchoredPosition = new Vector2((i - 4) * (SlotSize + SlotGap), 22 + SlotSize / 2f);
             }
-            // experience bar with the level number on top of it
             float xpY = 22 + SlotSize + 14;
-            var xpBack = Img("XP Back", root, new Vector2(0, xpY), new Vector2(width, 10), UISprites.Rounded, new Color(0, 0, 0, .6f), new Vector2(.5f, 0f));
-            xpFill = Img("XP Fill", xpBack.transform, Vector2.zero, new Vector2(width - 4, 6), null, XpGreen);
-            xpFill.type = Image.Type.Filled; xpFill.fillMethod = Image.FillMethod.Horizontal; xpFill.sprite = null;
-            levelText = Txt("Level", root, new Vector2(0, xpY + 24), new Vector2(120, 30), 24, XpGreen, TextAnchor.MiddleCenter, true, new Vector2(.5f, 0f));
-            // ten hearts on the left, coins on the right
-            heartFill = new Image[10]; heartGhost = new Image[10]; heartRoot = new RectTransform[10];
-            for (int i = 0; i < 10; i++)
-            {
-                var h = Rect("Heart " + (i + 1), root, new Vector2(.5f, 0f), new Vector2(-width / 2f + 16 + i * 32, xpY + 26), new Vector2(30, 30));
-                heartRoot[i] = h;
-                Img("Back", h, Vector2.zero, new Vector2(30, 30), UISprites.Heart, new Color(.08f, .03f, .04f, .75f));
-                heartGhost[i] = Img("Ghost", h, Vector2.zero, new Vector2(30, 30), UISprites.Heart, new Color(1f, .75f, .75f, .9f));
-                heartFill[i] = Img("Fill", h, Vector2.zero, new Vector2(30, 30), UISprites.Heart, HeartRed);
-                foreach (var img in new[] { heartGhost[i], heartFill[i] }) { img.type = Image.Type.Filled; img.fillMethod = Image.FillMethod.Horizontal; }
-                Img("Outline", h, Vector2.zero, new Vector2(30, 30), UISprites.HeartOutline, new Color(0, 0, 0, .8f));
-                Img("Shine", h, new Vector2(-6, 6), new Vector2(7, 5), UISprites.Circle, new Color(1, 1, 1, .55f));
-            }
-            var coin = Rect("Coins", root, new Vector2(.5f, 0f), new Vector2(width / 2f - 10, xpY + 26), new Vector2(160, 32), new Vector2(1f, .5f));
+            BuildOrb(root, width);
+            var coin = Rect("Coins", root, new Vector2(.5f, 0f), new Vector2(width / 2f - 10, xpY + 12), new Vector2(160, 32), new Vector2(1f, .5f));
             var coinIcon = Rect("Coin Icon", coin, new Vector2(1f, .5f), new Vector2(-14, 0), new Vector2(34, 34)).gameObject.AddComponent<RawImage>(); coinIcon.raycastTarget = false; coinIcon.texture = ItemIcons.Get(Items.Coin);
             coinText = Txt("Coin Count", coin, new Vector2(-36, 0), new Vector2(120, 30), 24, Gold, TextAnchor.MiddleRight, true, new Vector2(1f, .5f));
             coinText.rectTransform.pivot = new Vector2(1f, .5f);
             // item name above the belt (shown when switching)
-            itemName = Txt("Item Name", root, new Vector2(0, xpY + 68), new Vector2(700, 30), 24, Cream, TextAnchor.MiddleCenter, true, new Vector2(.5f, 0f));
+            itemName = Txt("Item Name", root, new Vector2(0, xpY + 16), new Vector2(700, 30), 24, Cream, TextAnchor.MiddleCenter, true, new Vector2(.5f, 0f));
             itemNameGroup = itemName.gameObject.AddComponent<CanvasGroup>(); itemNameGroup.alpha = 0f;
+        }
+
+        private static readonly Color Life = new Color(.35f, .95f, .3f), LifeDeep = new Color(.06f, .32f, .1f), Hurt = new Color(1f, .3f, .2f), HurtDeep = new Color(.4f, .03f, .05f), XpViolet = new Color(.78f, .55f, 1f);
+
+        private void BuildOrb(RectTransform root, float beltWidth)
+        {
+            const float size = 138f;
+            orbRoot = Rect("Life Flask", root, new Vector2(.5f, 0f), new Vector2(-beltWidth / 2f - 26f - size / 2f, 18f + size / 2f), new Vector2(size, size));
+            // experience arc (behind), 3/4 of a circle opening at the bottom-right
+            var track = Img("XP Track", orbRoot, Vector2.zero, new Vector2(size + 34, size + 34), UISprites.Ring, new Color(0, 0, 0, .55f));
+            xpArc = Img("XP Arc", orbRoot, Vector2.zero, new Vector2(size + 34, size + 34), UISprites.Ring, XpViolet);
+            foreach (var img in new[] { track, xpArc }) { img.type = Image.Type.Filled; img.fillMethod = Image.FillMethod.Radial360; img.fillOrigin = (int)Image.Origin360.Bottom; img.fillClockwise = true; img.rectTransform.localRotation = Quaternion.Euler(0, 0, -45f); }
+            track.fillAmount = .75f;
+            Img("Flask Shadow", orbRoot, new Vector2(0, -4), new Vector2(size + 6, size + 6), UISprites.Circle, new Color(0, 0, 0, .5f));
+            Img("Flask Glass", orbRoot, Vector2.zero, new Vector2(size, size), UISprites.Circle, new Color(.05f, .06f, .08f, .9f));
+            orbGhost = Rect("Ghost", orbRoot, new Vector2(.5f, .5f), Vector2.zero, new Vector2(size, size)).gameObject.AddComponent<LiquidOrb>();
+            orbGhost.deep = new Color(.55f, .45f, .45f); orbGhost.surface = new Color(.9f, .8f, .75f); orbGhost.foam = new Color(1f, .95f, .9f); orbGhost.raycastTarget = false; orbGhost.color = new Color(1, 1, 1, .55f);
+            orbLiquid = Rect("Potion", orbRoot, new Vector2(.5f, .5f), Vector2.zero, new Vector2(size, size)).gameObject.AddComponent<LiquidOrb>(); orbLiquid.raycastTarget = false;
+            bubbles = new RectTransform[6]; bubbleT = new float[6];
+            for (int i = 0; i < bubbles.Length; i++) { bubbles[i] = Img("Bubble", orbRoot, Vector2.zero, new Vector2(7, 7), UISprites.Ring, new Color(1, 1, 1, .5f)).rectTransform; bubbleT[i] = i / 6f; }
+            orbFlash = Img("Flash", orbRoot, Vector2.zero, new Vector2(size * .9f, size * .9f), UISprites.Circle, new Color(1, 1, 1, 0));
+            Img("Glass Shine", orbRoot, new Vector2(-30, 34), new Vector2(34, 20), UISprites.Circle, new Color(1, 1, 1, .22f)).rectTransform.localRotation = Quaternion.Euler(0, 0, 35f);
+            Img("Glass Glint", orbRoot, new Vector2(-44, 14), new Vector2(8, 8), UISprites.Circle, new Color(1, 1, 1, .35f));
+            orbRim = Img("Flask Rim", orbRoot, Vector2.zero, new Vector2(size + 8, size + 8), UISprites.Ring, new Color(.55f, .44f, .3f));
+            Img("Flask Rim Inner", orbRoot, Vector2.zero, new Vector2(size - 6, size - 6), UISprites.ThinRing, new Color(0, 0, 0, .6f));
+            // a cork-like cap on top
+            Img("Cap", orbRoot, new Vector2(0, size / 2f + 4), new Vector2(34, 16), UISprites.Rounded, new Color(.45f, .3f, .18f));
+            Img("Cap Band", orbRoot, new Vector2(0, size / 2f - 2), new Vector2(44, 8), UISprites.Rounded, new Color(.55f, .44f, .3f));
+            hpText = Txt("HP", orbRoot, new Vector2(0, 6), new Vector2(120, 40), 32, Color.white, TextAnchor.MiddleCenter);
+            hpMax = Txt("HP Max", orbRoot, new Vector2(0, -22), new Vector2(120, 22), 16, new Color(1, 1, 1, .75f), TextAnchor.MiddleCenter);
+            // level badge where the arc opens
+            var badge = Img("Level Badge", orbRoot, Dir(-45f) * (size / 2f + 17f), new Vector2(40, 40), UISprites.Rounded, new Color(.12f, .08f, .18f, .95f));
+            badge.rectTransform.localRotation = Quaternion.Euler(0, 0, 45f);
+            Img("Level Badge Rim", orbRoot, Dir(-45f) * (size / 2f + 17f), new Vector2(40, 40), UISprites.RoundedFrame, XpViolet).rectTransform.localRotation = Quaternion.Euler(0, 0, 45f);
+            levelText = Txt("Level", orbRoot, Dir(-45f) * (size / 2f + 17f), new Vector2(40, 30), 22, Color.white, TextAnchor.MiddleCenter);
         }
 
         private void ShowName(string text) { if (itemName == null) return; itemName.text = text; itemNameTimer = 2.2f; }
@@ -380,7 +400,7 @@ namespace Goblingame.TestScene
 
         private void Update()
         {
-            if (player == null || inventory == null || belt == null || heartFill == null) return;   // (a hot reload drops the built UI)
+            if (player == null || inventory == null || belt == null || orbLiquid == null) return;   // (a hot reload drops the built UI)
             float dt = Time.unscaledDeltaTime;
             var kb = Keyboard.current;
             bool bestiaryOpen = combatHud != null && combatHud.bestiary != null && combatHud.bestiary.activeSelf;
@@ -400,28 +420,44 @@ namespace Goblingame.TestScene
 
         private void UpdateHearts(float dt)
         {
-            float hp = player.Health, max = Mathf.Max(1f, player.MaxHealth), per = max / 10f;
-            if (hp < lastHealth - .01f) { hurtFlash = 1f; }
-            if (hp > lastHealth + .5f && healWave > 1.2f) healWave = 0f;
+            float hp = player.Health, max = Mathf.Max(1f, player.MaxHealth), f = Mathf.Clamp01(hp / max);
+            if (hp < lastHealth - .01f) { hurtFlash = 1f; orbLiquid.Slosh(6f); }
+            if (hp > lastHealth + .5f) healGlow = 1f;
             lastHealth = hp;
-            ghostHealth = hp > ghostHealth ? hp : Mathf.MoveTowards(ghostHealth, hp, (hurtFlash > 0f ? 0f : 1f) * max * .5f * dt);
-            hurtFlash = Mathf.MoveTowards(hurtFlash, 0f, dt * 2.2f);
-            healWave += dt;
-            bool low = hp / max < .3f;
-            for (int i = 0; i < 10; i++)
+            ghostHealth = hp > ghostHealth ? hp : Mathf.MoveTowards(ghostHealth, hp, (hurtFlash > .3f ? 0f : 1f) * max * .45f * dt);
+            hurtFlash = Mathf.MoveTowards(hurtFlash, 0f, dt * 2.5f); healGlow = Mathf.MoveTowards(healGlow, 0f, dt * 1.5f);
+            orbLiquid.fill = f; orbGhost.fill = Mathf.Clamp01(ghostHealth / max);
+            // healthy goblin potion is green; it curdles to red when life runs low
+            float danger = Mathf.InverseLerp(.45f, .15f, f);
+            orbLiquid.surface = Color.Lerp(Life, Hurt, danger); orbLiquid.deep = Color.Lerp(LifeDeep, HurtDeep, danger);
+            orbLiquid.foam = Color.Lerp(new Color(.85f, 1f, .7f), new Color(1f, .75f, .6f), danger);
+            orbLiquid.waveSpeed = 2.2f + danger * 3f;
+            float pulse = danger > .5f ? Mathf.Sin(Time.unscaledTime * 8f) * .035f * danger : 0f;
+            Vector2 shake = hurtFlash > 0f ? new Vector2(Mathf.Sin(Time.unscaledTime * 70f), Mathf.Cos(Time.unscaledTime * 55f)) * 5f * hurtFlash : Vector2.zero;
+            orbRoot.localScale = Vector3.one * (1f + pulse + hurtFlash * .06f + healGlow * .04f);
+            orbRoot.anchoredPosition = new Vector2(orbRoot.anchoredPosition.x, 18f + 69f) + shake;
+            orbFlash.color = new Color(1f, healGlow > hurtFlash ? 1f : .55f, healGlow > hurtFlash ? .7f : .5f, Mathf.Max(hurtFlash * .45f, healGlow * .3f));
+            orbRim.color = Color.Lerp(new Color(.55f, .44f, .3f), Hurt, hurtFlash * .8f + danger * .3f * (1f + Mathf.Sin(Time.unscaledTime * 6f)) * .5f);
+            hpText.text = Mathf.CeilToInt(hp).ToString(); hpMax.text = "/ " + Mathf.CeilToInt(max);
+            // bubbles rise through the potion and pop at the surface
+            float r = 69f * .9f, level = -r + 2f * r * f;
+            for (int i = 0; i < bubbles.Length; i++)
             {
-                heartFill[i].fillAmount = Mathf.Clamp01((hp - i * per) / per);
-                heartGhost[i].fillAmount = Mathf.Clamp01((ghostHealth - i * per) / per);
-                float y = 0f;
-                if (low) y += Mathf.Sin(Time.unscaledTime * 18f + i * 2.3f) * 2.2f;                 // shiver when nearly dead
-                float w = healWave * 14f - i; if (w > 0f && w < 1f) y += Mathf.Sin(w * Mathf.PI) * 6f;   // a wave runs across when healed
-                heartRoot[i].anchoredPosition = new Vector2(heartRoot[i].anchoredPosition.x, 22 + SlotSize + 14 + 26 + y);
-                heartFill[i].color = Color.Lerp(HeartRed, Color.white, hurtFlash * .6f);
-                heartRoot[i].localScale = Vector3.one * (1f + hurtFlash * .12f);
+                bubbleT[i] += dt * (.35f + i * .07f);
+                if (bubbleT[i] > 1f) bubbleT[i] -= 1f;
+                float x = Mathf.Sin(i * 2.7f + 1f) * r * .55f + Mathf.Sin(Time.unscaledTime * 2f + i) * 3f;
+                float bottom = -Mathf.Sqrt(Mathf.Max(0f, r * r - x * x)) + 6f, y = Mathf.Lerp(bottom, level - 4f, bubbleT[i]);
+                bool visible = level - 4f > bottom + 4f;
+                bubbles[i].anchoredPosition = new Vector2(x, y);
+                bubbles[i].localScale = Vector3.one * (.6f + bubbleT[i] * .8f);
+                bubbles[i].GetComponent<Image>().color = new Color(1, 1, 1, visible ? .45f * Mathf.Sin(bubbleT[i] * Mathf.PI) : 0f);
             }
             if (progression != null)
             {
-                xpFill.fillAmount = Mathf.MoveTowards(xpFill.fillAmount, progression.Experience / (float)Mathf.Max(1, progression.Required), dt);
+                float xp = progression.Experience / (float)Mathf.Max(1, progression.Required);
+                if (xp < shownXp - .3f) shownXp = 0f;   // level up: the arc empties and refills
+                shownXp = Mathf.MoveTowards(shownXp, xp, dt * .8f);
+                xpArc.fillAmount = .75f * shownXp;
                 levelText.text = progression.Level.ToString();
             }
         }

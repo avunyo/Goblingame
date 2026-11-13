@@ -379,6 +379,49 @@ namespace Goblingame.TestScene
                 return inventory != null ? inventory.Weapon : Items.Fists;
             }
         }
+        // ── weapon swings: with something in the hand the right arm slashes instead of jabbing.
+        // Poses are (raise about the goblin's right axis, sweep about up, elbow bend, shoulder twist);
+        // each combo hit has its own line: diagonal, backhand, rising, and an overhead chop to finish.
+        private struct SwingPose { public float raise, sweep, elbow, twist; public SwingPose(float r, float s, float e, float t) { raise = r; sweep = s; elbow = e; twist = t; } }
+        private static readonly SwingPose[][] Swings =
+        {
+            new[] { new SwingPose(-150f,  55f, -70f,  25f), new SwingPose(-35f, -50f, -5f, -22f), new SwingPose(-15f, -70f, -15f, -28f) },   // diagonal slash
+            new[] { new SwingPose(-85f,  -75f, -60f, -20f), new SwingPose(-80f,  60f, -5f,  25f), new SwingPose(-70f,  75f, -20f,  30f) },   // backhand sweep
+            new[] { new SwingPose(-10f,   35f, -40f,  15f), new SwingPose(-160f, -25f, -10f, -15f), new SwingPose(-170f, -35f, -25f, -18f) }, // rising cut
+            new[] { new SwingPose(-175f,  10f, -85f,   5f), new SwingPose(-15f,   0f,  0f,   0f), new SwingPose(-5f,    0f, -10f,   0f) },   // overhead chop
+        };
+        private float swingWeight;
+        private SwingPose swingNow;
+
+        private void ApplyWeaponSwing(float dt)
+        {
+            bool armed = EquippedWeapon != Items.Fists;
+            bool swinging = armed && attacking && move.state == "Punch" && comboIndex >= 0 && !IsDead;
+            swingWeight = Mathf.MoveTowards(swingWeight, swinging ? 1f : 0f, dt * (swinging ? 14f : 5f));
+            if (swingWeight <= 0f || upperArmR == null) return;
+            if (swinging)
+            {
+                var set = Swings[Mathf.Clamp(comboIndex, 0, Swings.Length - 1)];
+                float u = Mathf.InverseLerp(move.start, move.impact, clipTime), v = Mathf.InverseLerp(move.impact, move.end, clipTime);
+                float wind = Mathf.SmoothStep(0f, 1f, u / .55f), strike = Mathf.Clamp01((u - .55f) / .45f); strike *= strike;   // slow lift, snapping strike
+                SwingPose a = Lerp(new SwingPose(-20f, 0f, -30f, 0f), set[0], wind);
+                a = Lerp(a, set[1], strike);
+                a = Lerp(a, set[2], Mathf.SmoothStep(0f, 1f, v));
+                swingNow = a;
+            }
+            var p = swingNow; float w = swingWeight;
+            Vector3 right = transform.right, up = Vector3.up;
+            Turn(spine, p.twist * .6f * w, up);
+            Turn(upperArmR, p.raise * w, right);
+            Turn(upperArmR, p.sweep * w, up);
+            Turn(foreArmR, p.elbow * w, right);
+        }
+        private static SwingPose Lerp(SwingPose a, SwingPose b, float t) =>
+            new SwingPose(Mathf.Lerp(a.raise, b.raise, t), Mathf.Lerp(a.sweep, b.sweep, t), Mathf.Lerp(a.elbow, b.elbow, t), Mathf.Lerp(a.twist, b.twist, t));
+
+        /// <summary>For tests: the current arm swing (raise angle) and how strongly it is applied.</summary>
+        public float SwingRaise => swingNow.raise * swingWeight;
+
         private float MoveSpeedFor(Move m) => m.state == "Headbutt" ? m.speed : m.speed * EquippedWeapon.speed;
 
         private void EndAttack(float blend)
@@ -765,6 +808,7 @@ namespace Goblingame.TestScene
             animator.transform.localScale = baseModelScale;
             ApplyJumpPose(Time.deltaTime);
             ApplyDodgePose();
+            ApplyWeaponSwing(Time.deltaTime);
             if (flinch > 0f)
             {
                 float angle = Mathf.Sin(flinch * Mathf.PI) * 11f;

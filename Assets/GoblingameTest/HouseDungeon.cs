@@ -1,27 +1,36 @@
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.InputSystem;
 
 namespace Goblingame.TestScene
 {
     /// <summary>
-    /// A house you can walk into: while the goblin is inside, the roof and walls fade out
-    /// so the room stays visible from the third-person camera.
+    /// A house you can walk into: while the goblin is inside, the roof and the walls between the
+    /// camera and the room fade out (the far walls stay solid, so the room still reads as a room).
     /// </summary>
     public sealed class HouseDungeon : MonoBehaviour
     {
         public Renderer[] shell;
+        [Tooltip("Outward normal of each shell piece in house space; zero = roof (fades whenever the goblin is inside).")]
+        public Vector3[] shellNormals;
         public Vector3 interiorSize = new Vector3(7f, 4f, 5f);
-        public float fadedAlpha = 0.1f;
-        private readonly List<Material> materials = new List<Material>();
-        private float alpha = 1f; private bool transparentMode;
+        public float fadedAlpha = 0.08f;
+
+        private sealed class Piece { public Renderer renderer; public Material[] materials; public Vector3 normal; public float alpha = 1f; public bool transparent; }
+        private readonly List<Piece> pieces = new List<Piece>();
         public bool PlayerInside { get; private set; }
-        public float Alpha => alpha;
+        /// <summary>Alpha of the roof (the most faded part).</summary>
+        public float Alpha { get; private set; } = 1f;
+        /// <summary>Alpha of the most opaque wall (for tests: the far side stays solid).</summary>
+        public float SolidestWall { get; private set; } = 1f;
 
         private void Start()
         {
             if (shell == null) return;
-            foreach (var r in shell) if (r != null) materials.AddRange(r.materials);   // per-house instances
+            for (int i = 0; i < shell.Length; i++)
+            {
+                if (shell[i] == null) continue;
+                pieces.Add(new Piece { renderer = shell[i], materials = shell[i].materials, normal = shellNormals != null && i < shellNormals.Length ? shellNormals[i] : Vector3.zero });   // per-house instances
+            }
         }
 
         private void Update()
@@ -32,12 +41,25 @@ namespace Goblingame.TestScene
                 Vector3 local = transform.InverseTransformPoint(player.transform.position);
                 PlayerInside = Mathf.Abs(local.x) < interiorSize.x * .5f && Mathf.Abs(local.z) < interiorSize.z * .5f && local.y > -1f && local.y < interiorSize.y;
             }
-            float want = PlayerInside ? fadedAlpha : 1f;
-            if (Mathf.Approximately(alpha, want)) return;
-            alpha = Mathf.MoveTowards(alpha, want, Time.deltaTime * 3f);
-            bool needTransparent = alpha < 0.995f;
-            if (needTransparent != transparentMode) { transparentMode = needTransparent; foreach (var m in materials) SetMode(m, needTransparent); }
-            foreach (var m in materials) { var c = m.color; c.a = alpha; m.color = c; }
+            var cam = Camera.main;
+            Vector3 toCam = cam != null ? transform.InverseTransformDirection(cam.transform.position - transform.position) : Vector3.forward;
+            toCam.y = 0f; toCam.Normalize();
+            float roof = 1f, solid = 0f;
+            foreach (var p in pieces)
+            {
+                bool fade = PlayerInside && (p.normal == Vector3.zero || Vector3.Dot(p.normal, toCam) > .2f);
+                float want = fade ? fadedAlpha : 1f;
+                if (!Mathf.Approximately(p.alpha, want))
+                {
+                    p.alpha = Mathf.MoveTowards(p.alpha, want, Time.deltaTime * 3.5f);
+                    bool needTransparent = p.alpha < 0.995f;
+                    if (needTransparent != p.transparent) { p.transparent = needTransparent; foreach (var m in p.materials) SetMode(m, needTransparent); }
+                    foreach (var m in p.materials) { var c = m.color; c.a = p.alpha; m.color = c; }
+                    p.renderer.shadowCastingMode = p.alpha < .5f ? UnityEngine.Rendering.ShadowCastingMode.Off : UnityEngine.Rendering.ShadowCastingMode.On;
+                }
+                if (p.normal == Vector3.zero) roof = Mathf.Min(roof, p.alpha); else solid = Mathf.Max(solid, p.alpha);
+            }
+            Alpha = roof; SolidestWall = solid;
         }
 
         private static void SetMode(Material m, bool fade)

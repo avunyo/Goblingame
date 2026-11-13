@@ -99,8 +99,31 @@ namespace Goblingame.TestScene
             inventoryHud.player=player;inventoryHud.inventory=inv;
             // hearts and level now live above the belt; the old corner panel goes away
             var status=transform.Find("Goblin Status");if(status!=null)status.gameObject.SetActive(false);
-            var controls=transform.Find("Controls") as RectTransform;
-            if(controls!=null){controls.anchorMin=controls.anchorMax=controls.pivot=new Vector2(0,1);controls.anchoredPosition=new Vector2(24,-18);controls.sizeDelta=new Vector2(1250,90);var ct=controls.GetComponent<Text>();if(ct!=null){ct.alignment=TextAnchor.UpperLeft;ct.color=new Color(Cream.r,Cream.g,Cream.b,.75f);}}
+            // the long help text gives way to a short key list in the corner
+            var controls=transform.Find("Controls");if(controls!=null)controls.gameObject.SetActive(false);
+            BuildKeyList();
+        }
+
+        private void BuildKeyList()
+        {
+            string[,] keys={{"ЛКМ","удар"},{"ПКМ","блок"},{"Q","головой"},{"R","уклон"},{"Пробел","прыжок"},{"E","действие"},{"Колесо","оружие"},{"I","сумка"},{"F","фокус"},{"Tab","враги"}};
+            var list=new GameObject("Key List",typeof(RectTransform)).GetComponent<RectTransform>();list.SetParent(transform,false);
+            list.anchorMin=list.anchorMax=list.pivot=new Vector2(0,1);list.anchoredPosition=new Vector2(22,-18);list.sizeDelta=new Vector2(300,130);
+            var back=list.gameObject.AddComponent<Image>();back.sprite=UISprites.Rounded;back.type=Image.Type.Sliced;back.color=new Color(0,0,0,.32f);back.raycastTarget=false;
+            int rows=(keys.GetLength(0)+1)/2;
+            for(int i=0;i<keys.GetLength(0);i++)
+            {
+                int col=i/rows,row=i%rows;
+                Text Cell(string text,float x,float w,Color c,TextAnchor a)
+                {
+                    var rt=new GameObject(text,typeof(RectTransform)).GetComponent<RectTransform>();rt.SetParent(list,false);
+                    rt.anchorMin=rt.anchorMax=rt.pivot=new Vector2(0,1);rt.anchoredPosition=new Vector2(x,-10-row*22);rt.sizeDelta=new Vector2(w,22);
+                    var t=rt.gameObject.AddComponent<Text>();t.font=font;t.fontSize=15;t.color=c;t.alignment=a;t.text=text;t.raycastTarget=false;return t;
+                }
+                Cell(keys[i,0],12+col*148,62,Gold,TextAnchor.MiddleRight);
+                Cell(keys[i,1],80+col*148,80,new Color(Cream.r,Cream.g,Cream.b,.85f),TextAnchor.MiddleLeft);
+            }
+            list.sizeDelta=new Vector2(300,rows*22+18);
         }
 
         // ───────────── lock-on reticle ─────────────

@@ -11,6 +11,21 @@ namespace Goblingame.TestScene.Editor
     /// </summary>
     public static partial class SwampBuilder
     {
+        /// <summary>Routes each primitive to a per-side mesh (1 front, 2 back, 3 left, 4 right) by where it sits.</summary>
+        private sealed class ShellRouter
+        {
+            private readonly System.Func<Vector3, int> sideOf;
+            public readonly SortedDictionary<int, MeshB> Parts = new SortedDictionary<int, MeshB>();
+            public ShellRouter(System.Func<Vector3, int> sideOf) { this.sideOf = sideOf; }
+            private MeshB At(Vector3 p) { int k = sideOf(p); if (!Parts.TryGetValue(k, out var b)) Parts[k] = b = new MeshB(); return b; }
+            public void Box(Vector3 c, Vector3 size, Quaternion? rot = null) => At(c).Box(c, size, rot);
+            public void Tube(IList<Vector3> path, IList<float> radius, int sides, bool cap = true)
+            { Vector3 m = Vector3.zero; foreach (var q in path) m += q; At(m / path.Count).Tube(path, radius, sides, cap); }
+            public void Blob(Vector3 c, Vector3 scale, float jitter, System.Random r) => At(c).Blob(c, scale, jitter, r);
+            public void Double(Vector3 a, Vector3 b, Vector3 c) => At((a + b + c) / 3f).Double(a, b, c);
+            public void DoubleQuad(Vector3 a, Vector3 b, Vector3 c, Vector3 d) => At((a + b + c + d) / 4f).DoubleQuad(a, b, c, d);
+        }
+
         private static void BuildHouse(Transform parent, Vector3 at, Vector3 centre, Dictionary<string, GameObject> templates, TeleportPad dungeonPad, string name)
         {
             const float W = 8.2f, D = 6.4f, H = 3.0f, T = .26f;
@@ -32,9 +47,16 @@ namespace Goblingame.TestScene.Editor
             Material[] potions = { Mat("PotionTeal", new Color(.3f, .95f, .85f), .7f, emission: new Color(.2f, .9f, .8f)), Mat("PotionPink", new Color(1f, .4f, .7f), .7f, emission: new Color(.8f, .15f, .45f)),
                                    Mat("PotionAmber", new Color(1f, .7f, .2f), .7f, emission: new Color(.7f, .4f, .05f)), Mat("PotionViolet", new Color(.6f, .45f, 1f), .7f, emission: new Color(.35f, .2f, .9f)) };
             var flowerMats = new[] { Mat("FlowerPink", new Color(1f, .5f, .75f), emission: new Color(.25f, .08f, .15f)), Mat("FlowerYellow", new Color(1f, .85f, .3f), emission: new Color(.25f, .2f, .03f)), Mat("FlowerWhite", new Color(.95f, .95f, .9f), emission: new Color(.15f, .15f, .15f)) };
-            var shell = new List<Renderer>();
-            GameObject Shell(string n, MeshB b, Material m) { var go = Part(house, n, b, m); shell.Add(go.GetComponent<Renderer>()); return go; }
+            var shell = new List<Renderer>(); var shellNormals = new List<Vector3>();
+            GameObject Shell(string n, MeshB b, Material m) { var go = Part(house, n, b, m); shell.Add(go.GetComponent<Renderer>()); shellNormals.Add(Vector3.zero); return go; }   // roof: fades whenever inside
             float doorW = 1.7f, seg = (W - doorW) / 2f;
+            // wall-side pieces are split per side, so only the walls facing the camera fade
+            var routers = new List<(ShellRouter router, string name, Material mat, bool shadow)>();
+            ShellRouter Side(string n, Material m, bool shadow = true)
+            {
+                var rt = new ShellRouter(pt => Mathf.Abs(pt.z) / (D / 2f) >= Mathf.Abs(pt.x) / (W / 2f) ? (pt.z > 0f ? 1 : 2) : (pt.x > 0f ? 4 : 3));
+                routers.Add((rt, n, m, shadow)); return rt;
+            }
 
             // ── floor of planks, foundation stones (stay visible)
             var planks = new MeshB(); var planksB = new MeshB();
@@ -51,7 +73,7 @@ namespace Goblingame.TestScene.Editor
             Part(house, "Rug Border", rugB, rugEdge);
 
             // ── walls with a stone plinth (the plinth is part of the fading shell)
-            var walls = new MeshB(); var wallCols = new List<(Vector3 c, Vector3 s)>();
+            var walls = Side("Walls", plaster); var wallCols = new List<(Vector3 c, Vector3 s)>();
             void Wall(Vector3 c, Vector3 size) { walls.Box(c, size); wallCols.Add((c, size)); }
             Wall(new Vector3(0, H / 2f, -D / 2f), new Vector3(W, H, T));
             Wall(new Vector3(-W / 2f, H / 2f, 0), new Vector3(T, H, D));
@@ -59,9 +81,9 @@ namespace Goblingame.TestScene.Editor
             Wall(new Vector3(-(doorW / 2f + seg / 2f), H / 2f, D / 2f), new Vector3(seg, H, T));
             Wall(new Vector3(doorW / 2f + seg / 2f, H / 2f, D / 2f), new Vector3(seg, H, T));
             walls.Box(new Vector3(0, 2.3f + (H - 2.3f) / 2f, D / 2f), new Vector3(doorW, H - 2.3f, T));
-            var wgo = Shell("Walls", walls, plaster);
-            foreach (var (c, s) in wallCols) { var bc = wgo.AddComponent<BoxCollider>(); bc.center = c; bc.size = s; }
-            var plinth = new MeshB();
+            var wcol = new GameObject("Wall Colliders"); wcol.transform.SetParent(house, false);
+            foreach (var (c, s) in wallCols) { var bc = wcol.AddComponent<BoxCollider>(); bc.center = c; bc.size = s; }
+            var plinth = Side("Plinth", stoneB);
             plinth.Box(new Vector3(0, .3f, -D / 2f), new Vector3(W + .1f, .6f, T + .14f));
             foreach (float x in new[] { -W / 2f, W / 2f }) plinth.Box(new Vector3(x, .3f, 0), new Vector3(T + .14f, .6f, D + .1f));
             foreach (float sx in new[] { -1f, 1f }) plinth.Box(new Vector3(sx * (doorW / 2f + seg / 2f), .3f, D / 2f), new Vector3(seg, .6f, T + .14f));
@@ -73,10 +95,9 @@ namespace Goblingame.TestScene.Editor
                 if (side == 3 && Mathf.Abs(p.x) < doorW / 2f + .1f) continue;
                 plinth.Box(p, new Vector3(side == 1 || side == 2 ? .08f : Rr(.25f, .45f), Rr(.12f, .2f), side == 1 || side == 2 ? Rr(.25f, .45f) : .08f));
             }
-            Shell("Plinth", plinth, stoneB);
 
             // ── timber framing on every wall
-            var beams = new MeshB();
+            var beams = Side("Timber Frame", timber);
             foreach (float x in new[] { -W / 2f, W / 2f }) foreach (float z in new[] { -D / 2f, D / 2f }) beams.Box(new Vector3(x, H / 2f, z), new Vector3(.34f, H + .1f, .34f));
             foreach (float z in new[] { -D / 2f, D / 2f }) beams.Box(new Vector3(0, H, z), new Vector3(W + .3f, .28f, .34f));
             foreach (float x in new[] { -W / 2f, W / 2f }) beams.Box(new Vector3(x, H, 0), new Vector3(.34f, .28f, D + .3f));
@@ -92,10 +113,10 @@ namespace Goblingame.TestScene.Editor
             beams.Box(new Vector3(0, 2.38f, D / 2f + .03f), new Vector3(doorW + .4f, .2f, .32f));
             beams.Box(new Vector3(-W / 4f - .9f, H / 2f, D / 2f + .02f), new Vector3(.14f, H * 1.02f, .3f), Quaternion.Euler(0, 0, 22f));
             beams.Box(new Vector3(W / 4f + .9f, H / 2f, D / 2f + .02f), new Vector3(.14f, H * 1.02f, .3f), Quaternion.Euler(0, 0, -22f));
-            Shell("Timber Frame", beams, timber);
 
             // ── windows: glow, frames, shutters, flower boxes under the front ones
-            var win = new MeshB(); var frames = new MeshB(); var shut = new MeshB(); var boxes = new MeshB(); var flowers = new[] { new MeshB(), new MeshB(), new MeshB() }; var leaves = new MeshB();
+            var win = Side("Windows", windowGlow, false); var frames = Side("Window Frames", timber); var shut = Side("Shutters", shutter); var boxes = Side("Flower Boxes", furniture);
+            var flowers = new[] { Side("Flowers", flowerMats[0], false), Side("Flowers", flowerMats[1], false), Side("Flowers", flowerMats[2], false) }; var leaves = Side("Flower Leaves", leafGreen, false);
             void Window(Vector3 c, bool alongX, float outward, bool flowerBox)
             {
                 Vector3 along = alongX ? Vector3.right : Vector3.forward, outDir = alongX ? Vector3.forward * outward : Vector3.right * outward;
@@ -126,8 +147,6 @@ namespace Goblingame.TestScene.Editor
             }
             Window(new Vector3(-(doorW / 2f + seg / 2f), 1.75f, D / 2f + .1f), true, 1f, true); Window(new Vector3(doorW / 2f + seg / 2f, 1.75f, D / 2f + .1f), true, 1f, true);
             Window(new Vector3(-W / 2f - .1f, 1.75f, .6f), false, -1f, false); Window(new Vector3(W / 2f + .1f, 1.75f, -1.7f), false, 1f, false); Window(new Vector3(1.6f, 1.75f, -D / 2f - .1f), true, -1f, false);
-            NoShadow(Shell("Windows", win, windowGlow)); Shell("Window Frames", frames, timber); Shell("Shutters", shut, shutter); Shell("Flower Boxes", boxes, furniture);
-            for (int i = 0; i < 3; i++) NoShadow(Shell("Flowers", flowers[i], flowerMats[i])); NoShadow(Shell("Flower Leaves", leaves, leafGreen));
 
             // ── swept roof (ridge along X): steep at the ridge, kicking out at the eaves, with rows of tiles
             float ridge = H + 2.9f, over = 1.0f, eaveZ = D / 2f + 1.15f;
@@ -172,7 +191,7 @@ namespace Goblingame.TestScene.Editor
             for (float x = -W / 2f - over; x <= W / 2f + over; x += .45f) ridgeCap.Box(new Vector3(x, ridge + .12f, 0), new Vector3(.44f, .2f, .42f), Quaternion.Euler(45f, 0, 0));
             Shell("Ridge", ridgeCap, stoneB);
             // gables with a round attic window and crossed timbers, bargeboards on the edges
-            var gable = new MeshB(); var gableTimber = new MeshB(); var attic = new MeshB();
+            var gable = Side("Gables", plaster); var gableTimber = Side("Gable Timber", timber); var attic = Side("Attic Windows", windowGlow, false);
             foreach (float x in new[] { -W / 2f, W / 2f })
             {
                 float sx = Mathf.Sign(x);
@@ -188,7 +207,6 @@ namespace Goblingame.TestScene.Editor
                     gableTimber.Tube(pts, rad, 4);
                 }
             }
-            Shell("Gables", gable, plaster); Shell("Gable Timber", gableTimber, timber); NoShadow(Shell("Attic Windows", attic, windowGlow));
             // stone chimney above the fireplace, smoke curling out
             Vector3 chim = new Vector3(W / 2f - .45f, 0, .9f);
             var chimney = new MeshB();
@@ -206,14 +224,12 @@ namespace Goblingame.TestScene.Editor
             string smokePath = Folder + "/Materials/ChimneySmoke.mat"; if (UnityEditor.AssetDatabase.LoadAssetAtPath<Material>(smokePath) == null) UnityEditor.AssetDatabase.CreateAsset(smokeMat, smokePath); else smokeMat = UnityEditor.AssetDatabase.LoadAssetAtPath<Material>(smokePath);
             smoke.GetComponent<ParticleSystemRenderer>().sharedMaterial = smokeMat;
             // porch roof over the door
-            var porch = new MeshB();
+            var porch = Side("Porch Posts", timber);
             foreach (float x in new[] { -1.25f, 1.25f }) porch.Box(new Vector3(x, 1.25f, D / 2f + 1.35f), new Vector3(.16f, 2.5f, .16f));
             porch.Box(new Vector3(0, 2.5f, D / 2f + 1.35f), new Vector3(2.8f, .16f, .18f));
             foreach (float x in new[] { -1.25f, 1.25f }) porch.Box(new Vector3(x, 2.3f, D / 2f + 1.15f), new Vector3(.1f, .1f, .55f), Quaternion.Euler(40f, 0, 0));
-            Shell("Porch Posts", porch, timber);
-            var porchRoof = new MeshB(); porchRoof.Box(new Vector3(0, 2.75f, D / 2f + .85f), new Vector3(3.2f, .1f, 1.5f), Quaternion.Euler(-16f, 0, 0));
+            var porchRoof = Side("Porch Roof", slateB); porchRoof.Box(new Vector3(0, 2.75f, D / 2f + .85f), new Vector3(3.2f, .1f, 1.5f), Quaternion.Euler(-16f, 0, 0));
             for (float x = -1.45f; x <= 1.46f; x += .48f) porchRoof.Box(new Vector3(x, 2.82f, D / 2f + .85f), new Vector3(.46f, .05f, 1.5f), Quaternion.Euler(-16f + Rr(-2f, 2f), 0, 0));
-            Shell("Porch Roof", porchRoof, slateB);
 
             // ── door (open), step stones, lanterns
             var door = new MeshB(); door.Box(new Vector3(-doorW / 2f - .55f, 1.12f, D / 2f + .62f), new Vector3(.1f, 2.2f, 1.3f), Quaternion.Euler(0, -18f, 0));
@@ -339,7 +355,15 @@ namespace Goblingame.TestScene.Editor
             Part(house, "Rain Barrel", rain, furniture);
 
             PointLight(house, new Vector3(0, 2.4f, 0), new Color(1f, .78f, .5f), 9f, 1.2f);   // warm room light
-            var hd = house.gameObject.AddComponent<HouseDungeon>(); hd.shell = shell.ToArray(); hd.interiorSize = new Vector3(W - .3f, 4f, D - .3f);
+            Vector3[] sideNormal = { Vector3.zero, Vector3.forward, Vector3.back, Vector3.left, Vector3.right };
+            string[] sideName = { "", " (front)", " (back)", " (left)", " (right)" };
+            foreach (var (router, n, m, shadow) in routers)
+                foreach (var kv in router.Parts)
+                {
+                    var go = Part(house, n + sideName[kv.Key], kv.Value, m); if (!shadow) NoShadow(go);
+                    shell.Add(go.GetComponent<Renderer>()); shellNormals.Add(sideNormal[kv.Key]);
+                }
+            var hd = house.gameObject.AddComponent<HouseDungeon>(); hd.shell = shell.ToArray(); hd.shellNormals = shellNormals.ToArray(); hd.interiorSize = new Vector3(W - .3f, 4f, D - .3f);
 
             if (dungeonPad == null)
             {

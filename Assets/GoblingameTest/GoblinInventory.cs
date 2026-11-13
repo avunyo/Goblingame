@@ -45,8 +45,6 @@ namespace Goblingame.TestScene
         private void Start()
         {
             FindHand();
-            bool empty = true; foreach (var s in slots) if (!s.Empty) empty = false;
-            if (empty) Add(Items.Mushroom, 2, false);   // a snack for the road
             RefreshHeld();
         }
 
@@ -210,7 +208,7 @@ namespace Goblingame.TestScene
             across = Vector3.ProjectOnPlane(across, fingers).normalized;
             if (across.sqrMagnitude < .1f) across = Vector3.Cross(fingers, transform.forward).normalized;
             Vector3 palm = Vector3.Cross(fingers, across);
-            Quaternion world = Quaternion.LookRotation(palm, across);   // item +Y along the handle, front out of the palm
+            Quaternion world = Quaternion.LookRotation(-palm, -across);   // item +Y along the handle, blade up out of the fist (thumb side)
             gripRotation = Quaternion.Inverse(hand.rotation) * world;
             float reach = middle != null ? (middle.position - hand.position).magnitude : .08f;
             gripOffset = Quaternion.Inverse(hand.rotation) * (fingers * reach * 1.15f - palm * reach * .25f);   // metres, in the hand's frame

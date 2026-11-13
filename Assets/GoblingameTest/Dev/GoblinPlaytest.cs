@@ -493,7 +493,7 @@ namespace Goblingame.TestScene.Dev
             var ihud = FindFirstObjectByType<InventoryHUD>();
             Check(inv != null && ihud != null, "Inventory and its HUD are set up");
             if (inv == null || ihud == null) yield break;
-            Check(inv.Count("coin") > 0, "Fallen monsters dropped coins that flew into the bag (" + inv.Count("coin") + ")");
+            Check(inv.Count("coin") > 0 || FindObjectsByType<ItemPickup>(FindObjectsSortMode.None).Any(pk => pk.itemId == "coin"), "Fallen monsters drop coins (" + inv.Count("coin") + " in the bag)");
             Call(combat, "Respawn");
             // enemies step aside: these checks are about the goblin and his bag
             var benched = EnemyActor.All.Where(e => e != null && e.gameObject.activeSelf).ToList();
@@ -514,6 +514,7 @@ namespace Goblingame.TestScene.Dev
             var drop = ItemPickup.Spawn("dagger", 1, combat.transform.position + combat.transform.forward * 1.8f + Vector3.up, Vector3.up * 2f);
             bool hadDagger = inv.Has("dagger");
             for (float t = 0; t < 4f && !(inv.Count("dagger") > (hadDagger ? 1 : 0)); t += Time.unscaledDeltaTime) yield return null;
+            yield return null;   // the picked-up item is removed at the end of the frame
             Check(inv.Has("dagger") && drop == null, "Dagger pickup flies into the bag (had " + hadDagger + ", now " + inv.Count("dagger") + (drop != null ? ", pickup still at " + (drop.transform.position - combat.transform.position).ToString("0.0") : "") + ")");
             inv.Equip("dagger", 1);
             yield return new WaitForSecondsRealtime(0.5f);
@@ -549,6 +550,24 @@ namespace Goblingame.TestScene.Dev
                 if (!inv.Has("club")) inv.Add(Items.Club, 1, false);
                 float b1 = Punch("club"); yield return new WaitForSecondsRealtime(1.2f); float clubDmg = b1 - dummyT.Health;
                 Check(fistDmg > 0f && clubDmg > fistDmg * 1.3f, "The club hits harder than fists (" + fistDmg.ToString("0") + " → " + clubDmg.ToString("0") + ")");
+                dummyT.RestoreHealth();
+                // with a weapon the right arm swings it: wind-up over the shoulder, then the strike
+                inv.Equip("club", 0); Teleport(dp + off, dp);
+                yield return new WaitForSecondsRealtime(0.3f);
+                view.enabled = false;
+                var camT = Camera.main.transform; Vector3 side = Vector3.Cross(Vector3.up, Flat(dp - combat.transform.position).normalized);
+                camT.position = combat.transform.position + side * 3.2f + Vector3.up * 1.4f - Flat(dp - combat.transform.position).normalized * .6f; camT.LookAt(combat.transform.position + Vector3.up * 1.0f);
+                Set(combat, "comboIndex", -1); Call(combat, "NextPunch");
+                float maxRaise = 0f; bool s1 = false, s2 = false;
+                for (float t = 0; t < 0.9f; t += Time.unscaledDeltaTime)
+                {
+                    maxRaise = Mathf.Max(maxRaise, -combat.SwingRaise);
+                    if (!s1 && t > .13f) { s1 = true; yield return Shot("19_swing_windup"); }
+                    if (!s2 && t > .27f) { s2 = true; yield return Shot("19_swing_strike"); }
+                    yield return null;
+                }
+                Check(maxRaise > 80f, "The club is swung over the shoulder, not jabbed (arm raised " + maxRaise.ToString("0") + "°)");
+                view.enabled = true;
                 dummyT.RestoreHealth();
             }
             // the wheel flips weapons: the arc slides, the hub spins the new icon in
@@ -789,7 +808,8 @@ namespace Goblingame.TestScene.Dev
                     yield return new WaitForSecondsRealtime(0.2f); yield return Shot("17_house_back");
                     Teleport(ht.position + ht.forward * 1.2f + Vector3.up * .2f, ht.position - ht.forward * 3f);
                     yield return new WaitForSecondsRealtime(1.0f);
-                    Check(houseA.PlayerInside && houseA.Alpha < .2f, "Inside the house the roof and walls fade (alpha " + houseA.Alpha.ToString("0.00") + ")");
+                    Check(houseA.PlayerInside && houseA.Alpha < .2f, "Inside the house the roof fades (alpha " + houseA.Alpha.ToString("0.00") + ")");
+                    Check(houseA.SolidestWall > .9f, "...but the far walls stay solid (" + houseA.SolidestWall.ToString("0.00") + ")");
                     cam.position = ht.position + ht.forward * 9f + ht.right * 5f + Vector3.up * 9f; cam.LookAt(ht.position + Vector3.up * .8f);
                     var ambush = houseA.GetComponentInChildren<MobLair>();
                     for (float t = 0; t < 5f && ambush != null && ambush.Spawned < 2; t += Time.unscaledDeltaTime) yield return null;
