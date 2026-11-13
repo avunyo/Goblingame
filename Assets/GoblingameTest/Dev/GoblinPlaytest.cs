@@ -481,8 +481,111 @@ namespace Goblingame.TestScene.Dev
                 yield return Shot("08_bestiary");
                 hud.bestiary.SetActive(false);
             }
+            yield return InventoryChecks(spawn);
             yield return PoseGallery(enemies);
             Finish();
+        }
+
+        /// <summary>Belt, pickups, weapons in the hand and their damage, eating, the weapon arc and the bag screen.</summary>
+        private IEnumerator InventoryChecks(Vector3 spawn)
+        {
+            var inv = combat.GetComponent<GoblinInventory>();
+            var ihud = FindFirstObjectByType<InventoryHUD>();
+            Check(inv != null && ihud != null, "Inventory and its HUD are set up");
+            if (inv == null || ihud == null) yield break;
+            Check(inv.Count("coin") > 0, "Fallen monsters dropped coins that flew into the bag (" + inv.Count("coin") + ")");
+            Call(combat, "Respawn");
+            // enemies step aside: these checks are about the goblin and his bag
+            var benched = EnemyActor.All.Where(e => e != null && e.gameObject.activeSelf).ToList();
+            foreach (var e in benched) e.gameObject.SetActive(false);
+            yield return new WaitForSecondsRealtime(0.5f);
+            Teleport(spawn, spawn + Vector3.forward);
+            view.Snap();
+            // eating: a glow mushroom heals and is used up
+            if (inv.Count("mushroom") == 0) inv.Add(Items.Mushroom, 2, false);
+            int mushSlot = -1; for (int i = 0; i < GoblinInventory.Size; i++) if (inv[i].id == "mushroom") { mushSlot = i; break; }
+            Set(combat, "health", 50f);
+            int mushBefore = inv.Count("mushroom");
+            bool ate = inv.Use(mushSlot);
+            Check(ate && combat.Health > 65f && inv.Count("mushroom") == mushBefore - 1, "Eating a glow mushroom heals (50 → " + combat.Health.ToString("0") + ") and uses it up");
+            Set(combat, "health", combat.MaxHealth);
+            // a dagger lying in front of the goblin flies into the bag
+            inv.Equip("fists", 0);
+            var drop = ItemPickup.Spawn("dagger", 1, combat.transform.position + combat.transform.forward * 1.8f + Vector3.up, Vector3.up * 2f);
+            bool hadDagger = inv.Has("dagger");
+            for (float t = 0; t < 4f && !(inv.Count("dagger") > (hadDagger ? 1 : 0)); t += Time.unscaledDeltaTime) yield return null;
+            Check(inv.Has("dagger") && drop == null, "Dagger pickup flies into the bag (had " + hadDagger + ", now " + inv.Count("dagger") + (drop != null ? ", pickup still at " + (drop.transform.position - combat.transform.position).ToString("0.0") : "") + ")");
+            inv.Equip("dagger", 1);
+            yield return new WaitForSecondsRealtime(0.5f);
+            Transform held = inv.Held;
+            float handGap = held != null && inv.Hand != null ? Vector3.Distance(held.position, inv.Hand.position) : 99f;
+            var heldBounds = held != null ? held.GetComponent<Renderer>().bounds.size.magnitude : 0f;
+            Check(held != null && held.name.Contains(Items.Dagger.name) && handGap < .3f && heldBounds > .2f && heldBounds < 1.5f,
+                  "The dagger sits in the right hand (" + handGap.ToString("0.00") + " m from the hand, " + heldBounds.ToString("0.00") + " m long)");
+            if (held != null)
+            {
+                view.enabled = false;
+                var camT = Camera.main.transform; Vector3 f = combat.transform.forward, r = combat.transform.right;
+                camT.position = held.position + f * 1.1f + r * .7f + Vector3.up * .25f; camT.LookAt(held.position);
+                yield return Shot("18_hand_dagger");
+                inv.Add(Items.Cleaver, 1, false); inv.Equip("cleaver", 1);
+                yield return new WaitForSecondsRealtime(0.4f);
+                held = inv.Held;
+                camT.position = combat.transform.position + f * 2.2f + r * 1.0f + Vector3.up * 1.3f; camT.LookAt(combat.transform.position + Vector3.up * .8f);
+                yield return Shot("18_hand_cleaver");
+                view.enabled = true;
+            }
+            // weapons change the damage: one punch on the dummy with fists vs the club
+            if (hud != null && hud.dummy != null)
+            {
+                var dummyT = hud.dummy.GetComponent<DamageableTarget>();
+                Vector3 dp = hud.dummy.transform.position; Vector3 off = Flat(spawn - dp).normalized * 1.2f;
+                float Punch(string weapon)
+                {
+                    inv.Equip(weapon, 0); dummyT.RestoreHealth(); Teleport(dp + off, dp);
+                    float before = dummyT.Health; Set(combat, "comboIndex", -1); Call(combat, "NextPunch"); return before;
+                }
+                float b0 = Punch("fists"); yield return new WaitForSecondsRealtime(1.0f); float fistDmg = b0 - dummyT.Health;
+                if (!inv.Has("club")) inv.Add(Items.Club, 1, false);
+                float b1 = Punch("club"); yield return new WaitForSecondsRealtime(1.2f); float clubDmg = b1 - dummyT.Health;
+                Check(fistDmg > 0f && clubDmg > fistDmg * 1.3f, "The club hits harder than fists (" + fistDmg.ToString("0") + " → " + clubDmg.ToString("0") + ")");
+                dummyT.RestoreHealth();
+            }
+            // the wheel flips weapons: the arc slides, the hub spins the new icon in
+            Teleport(spawn, spawn + Vector3.forward);
+            view.Snap();
+            yield return new WaitForSecondsRealtime(0.4f);
+            string w0 = inv.Weapon.id;
+            inv.Cycle(1);
+            Check(inv.Weapon.id != w0, "Flipping weapons changes the weapon in hand (" + w0 + " → " + inv.Weapon.id + ")");
+            yield return new WaitForSecondsRealtime(0.08f);
+            yield return Shot("18_weapon_swap");
+            float arcPos0 = (float)Get(ihud, "arcPos");
+            yield return new WaitForSecondsRealtime(0.6f);
+            Check(Mathf.Abs((float)Get(ihud, "arcPos") - (float)Get(ihud, "arcTarget")) < .05f && Mathf.Abs(arcPos0 - (float)Get(ihud, "arcTarget")) > .02f, "Weapon arc slides to the new weapon");
+            yield return Shot("18_hud");
+            // belt slots show the bag; the bag screen opens with the cursor free and closes again
+            var beltIcon = ihud.transform.Find("Belt HUD/Belt 1/Icon");
+            Check(beltIcon != null && beltIcon.GetComponent<UnityEngine.UI.RawImage>().texture != null, "Belt slot 1 shows an item icon");
+            ihud.ToggleScreen(true);
+            yield return new WaitForSecondsRealtime(0.3f);
+            Check(ihud.ScreenOpen && Cursor.lockState != CursorLockMode.Locked && inv.Open, "Bag screen opens with a free cursor");
+            yield return Shot("18_bag");
+            ihud.ToggleScreen(false);
+            yield return null;
+            Check(!ihud.ScreenOpen && !inv.Open, "Bag screen closes");
+            // throwing a stack out: it lands nearby and isn't grabbed back at once
+            int bone = -1; inv.Add(Items.Bone, 3, false); for (int i = 0; i < GoblinInventory.Size; i++) if (inv[i].id == "bone") bone = i;
+            inv.Drop(bone);
+            yield return new WaitForSecondsRealtime(1.0f);
+            var bonePick = FindObjectsByType<ItemPickup>(FindObjectsSortMode.None).FirstOrDefault(pk => pk.itemId == "bone");
+            Check(inv.Count("bone") == 0 && bonePick != null, "A dropped stack lies on the ground");
+            yield return new WaitForSecondsRealtime(1.8f);
+            if (bonePick != null) Teleport(bonePick.transform.position - combat.transform.forward * .8f, bonePick.transform.position);   // walk back to it
+            for (float t = 0; t < 4f && inv.Count("bone") == 0; t += Time.unscaledDeltaTime) yield return null;
+            Check(inv.Count("bone") == 3, "...and can be picked up again later (" + inv.Count("bone") + ")");
+            inv.Equip("fists", 0);
+            foreach (var e in benched) if (e != null) e.gameObject.SetActive(true);
         }
 
         /// <summary>Close-up 3/4 shots of every enemy clip at key phases (for visual review).</summary>
@@ -623,6 +726,17 @@ namespace Goblingame.TestScene.Dev
                     (home + new Vector3(-6, 3.5f, -14), home + new Vector3(9, 1, -12), "16_world_arena_edge"),
                 };
                 foreach (var v in looks) { cam.position = v.pos; cam.LookAt(v.look); yield return new WaitForSecondsRealtime(0.2f); yield return Shot(v.name); }
+                var ruin = worldRoot.transform.Find("Landmarks/Standing Stones");
+                Check(ruin != null, "Standing-stone ruins built");
+                if (ruin != null) { cam.position = ruin.position + ruin.forward * 14f + ruin.right * 6f + Vector3.up * 4.5f; cam.LookAt(ruin.position + Vector3.up * 1.5f); yield return new WaitForSecondsRealtime(0.2f); yield return Shot("16_world_ruin"); }
+                var lantern = worldRoot.transform.Find("Landmarks/Lantern Post");
+                Check(lantern != null, "Paths have lantern posts");
+                if (lantern != null) { cam.position = lantern.position + lantern.forward * 3f + lantern.right * 9f + Vector3.up * 2.2f; cam.LookAt(lantern.position + Vector3.up * 1.2f - lantern.right * 6f); yield return new WaitForSecondsRealtime(0.2f); yield return Shot("16_world_path"); }
+                var shroom = worldRoot.transform.Find("Landmarks/Giant Mushrooms");
+                Check(shroom != null && shroom.childCount > 10, "Giant mushrooms grow in the forest (" + (shroom != null ? shroom.childCount : 0) + ")");
+                if (shroom != null && shroom.childCount > 0) { var g = shroom.GetChild(0); cam.position = g.position + new Vector3(7f, 3f, 7f); cam.LookAt(g.position + Vector3.up * 2.5f); yield return new WaitForSecondsRealtime(0.2f); yield return Shot("16_world_mushrooms"); }
+                var terrainData = worldRoot.GetComponentInChildren<Terrain>().terrainData;
+                Check(terrainData.detailPrototypes.Length >= 2 && terrainData.GetDetailLayer(0, 0, terrainData.detailWidth, terrainData.detailHeight, 0).Cast<int>().Sum() > 20000, "Instanced grass carpet planted");
 
                 // campfire heals
                 var fire = worldRoot.GetComponentInChildren<Campfire>();
@@ -669,6 +783,10 @@ namespace Goblingame.TestScene.Dev
                     yield return new WaitForSecondsRealtime(0.4f);
                     Check(!houseA.PlayerInside && houseA.Alpha > .95f, "House is solid from outside");
                     yield return Shot("17_house_outside");
+                    cam.position = ht.position + ht.forward * 8f - ht.right * 7f + Vector3.up * 3.2f; cam.LookAt(ht.position + Vector3.up * 2.2f);
+                    yield return new WaitForSecondsRealtime(0.2f); yield return Shot("17_house_detail");
+                    cam.position = ht.position - ht.forward * 10f + ht.right * 9f + Vector3.up * 5f; cam.LookAt(ht.position + Vector3.up * 2.2f);
+                    yield return new WaitForSecondsRealtime(0.2f); yield return Shot("17_house_back");
                     Teleport(ht.position + ht.forward * 1.2f + Vector3.up * .2f, ht.position - ht.forward * 3f);
                     yield return new WaitForSecondsRealtime(1.0f);
                     Check(houseA.PlayerInside && houseA.Alpha < .2f, "Inside the house the roof and walls fade (alpha " + houseA.Alpha.ToString("0.00") + ")");
@@ -678,10 +796,15 @@ namespace Goblingame.TestScene.Dev
                     Check(ambush != null && ambush.Spawned > 0, "House ambush springs (" + (ambush != null ? ambush.Spawned : 0) + " mobs)");
                     yield return new WaitForSecondsRealtime(0.6f);
                     yield return Shot("17_house_inside");
+                    cam.position = ht.position + ht.forward * 3.5f + ht.right * 2.5f + Vector3.up * 6.5f; cam.LookAt(ht.position - ht.forward * .5f);
+                    yield return new WaitForSecondsRealtime(0.2f); yield return Shot("17_house_interior");
                     foreach (var e in EnemyActor.All.ToArray()) if (e != null && !e.respawns && !e.Health.IsDead) e.Health.TakeHit(new HitInfo { damage = 9999, source = combat.transform.position });
                     var chest = houseA.GetComponentInChildren<Chest>();
                     var prog = combat.GetComponent<PlayerProgression>(); int xpBefore = prog != null ? prog.Experience + prog.Level * 1000 : 0;
+                    int pickupsBefore = FindObjectsByType<ItemPickup>(FindObjectsSortMode.None).Length;
                     if (chest != null) chest.Open();
+                    yield return null;
+                    Check(FindObjectsByType<ItemPickup>(FindObjectsSortMode.None).Length > pickupsBefore, "Chest loot pops out");
                     yield return new WaitForSecondsRealtime(0.7f);
                     Check(chest != null && chest.IsOpen && (prog == null || prog.Experience + prog.Level * 1000 > xpBefore), "Chest opens and pays experience");
                     yield return Shot("17_house_chest_open");

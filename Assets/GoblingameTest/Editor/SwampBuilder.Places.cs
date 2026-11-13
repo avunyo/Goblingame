@@ -145,7 +145,7 @@ namespace Goblingame.TestScene.Editor
         }
 
         // ───────────────────────── chest / rune circle ─────────────────────────
-        private static Chest BuildChest(Transform parent, Vector3 local, float yaw, int xp, float heal, bool big = false)
+        private static Chest BuildChest(Transform parent, Vector3 local, float yaw, int xp, float heal, bool big = false, params string[] loot)
         {
             float s = big ? 1.45f : 1f;
             var chest = new GameObject(big ? "Great Chest" : "Chest").transform; chest.SetParent(parent, false); chest.localPosition = local; chest.localRotation = Quaternion.Euler(0, yaw, 0); chest.localScale = Vector3.one * s;
@@ -157,7 +157,7 @@ namespace Goblingame.TestScene.Editor
             var lidBands = new MeshB(); foreach (float x in new[] { -.36f, .36f }) lidBands.Box(new Vector3(x, .13f, .33f), new Vector3(.1f, .28f, .68f)); Part(lid, "Lid Bands", lidBands, metal);
             var glow = PointLight(chest, new Vector3(0, .9f, .2f), new Color(1f, .8f, .35f), 3.5f, 1.2f);
             var bc = chest.gameObject.AddComponent<BoxCollider>(); bc.center = new Vector3(0, .38f, 0); bc.size = new Vector3(1f, .76f, .66f);
-            var c = chest.gameObject.AddComponent<Chest>(); c.lid = lid; c.experience = xp; c.heal = heal; c.glow = glow; return c;
+            var c = chest.gameObject.AddComponent<Chest>(); c.lid = lid; c.experience = xp; c.heal = heal; c.glow = glow; c.loot = loot; return c;
         }
 
         private static TeleportPad BuildPad(Transform parent, Vector3 local, float yaw, string label)
@@ -183,134 +183,6 @@ namespace Goblingame.TestScene.Editor
             NoShadow(Part(ring, "Glyph", glyph, Mat("RuneGlow", new Color(.7f, .5f, 1f), emission: new Color(1.6f, .9f, 3f))));
             PointLight(pad, Vector3.up * .8f, new Color(.6f, .4f, 1f), 5f, 1.6f);
             var tp = pad.gameObject.AddComponent<TeleportPad>(); tp.ring = ring; tp.label = label; return tp;
-        }
-
-        // ───────────────────────── house ─────────────────────────
-        private static void BuildHouse(Transform parent, Vector3 at, Vector3 centre, Dictionary<string, GameObject> templates, TeleportPad dungeonPad, string name)
-        {
-            const float W = 8.2f, D = 6.4f, H = 3.0f, T = .26f;
-            var house = new GameObject(name).transform; house.SetParent(parent, false); house.position = at + Vector3.up * .02f; house.rotation = Quaternion.LookRotation(Flat(centre - at));
-            house.gameObject.AddComponent<CameraIgnore>();
-            var r = new System.Random(321 + (int)at.x);
-            float Rr(float a, float b) => a + (float)r.NextDouble() * (b - a);
-            Material plaster = Mat("Plaster", new Color(.60f, .54f, .62f)), timber = Mat("Timber", new Color(.16f, .12f, .17f)), slate = Mat("RoofSlate", new Color(.20f, .17f, .32f)),
-                stone = Mat("HouseStone", new Color(.29f, .28f, .36f)), windowGlow = Mat("WindowGlow", new Color(1f, .82f, .5f), emission: new Color(2.2f, 1.4f, .6f)), floorWood = Mat("FloorWood", new Color(.34f, .24f, .17f));
-            var shell = new List<Renderer>();
-            GameObject Shell(string n, MeshB b, Material m) { var go = Part(house, n, b, m); shell.Add(go.GetComponent<Renderer>()); return go; }
-
-            // floor & foundation (stay visible)
-            var fl = new MeshB(); fl.Box(new Vector3(0, .04f, 0), new Vector3(W, .1f, D)); Part(house, "Floor", fl, floorWood);
-            var found = new MeshB(); found.Box(new Vector3(0, -.2f, 0), new Vector3(W + .5f, .5f, D + .5f)); Part(house, "Foundation", found, stone);
-            var rug = new MeshB(); rug.Box(new Vector3(0, .1f, -.2f), new Vector3(3.2f, .02f, 2.2f)); Part(house, "Rug", rug, Mat("Rug", new Color(.5f, .16f, .22f)));
-
-            // walls with a doorway in the front (+Z)
-            void Wall(Vector3 c, Vector3 size)
-            {
-                var b = new MeshB(); b.Box(c, size); var go = Shell("Wall", b, plaster);
-                var bc = go.AddComponent<BoxCollider>(); bc.center = c; bc.size = size;
-            }
-            float doorW = 1.7f, seg = (W - doorW) / 2f;
-            Wall(new Vector3(0, H / 2f, -D / 2f), new Vector3(W, H, T));
-            Wall(new Vector3(-W / 2f, H / 2f, 0), new Vector3(T, H, D));
-            Wall(new Vector3(W / 2f, H / 2f, 0), new Vector3(T, H, D));
-            Wall(new Vector3(-(doorW / 2f + seg / 2f), H / 2f, D / 2f), new Vector3(seg, H, T));
-            Wall(new Vector3(doorW / 2f + seg / 2f, H / 2f, D / 2f), new Vector3(seg, H, T));
-            var lintel = new MeshB(); lintel.Box(new Vector3(0, 2.3f + (H - 2.3f) / 2f, D / 2f), new Vector3(doorW, H - 2.3f, T)); Shell("Lintel", lintel, plaster);
-
-            // timber frame
-            var beams = new MeshB();
-            foreach (float x in new[] { -W / 2f, W / 2f }) foreach (float z in new[] { -D / 2f, D / 2f }) beams.Box(new Vector3(x, H / 2f, z), new Vector3(.34f, H + .1f, .34f));
-            foreach (float z in new[] { -D / 2f, D / 2f }) { beams.Box(new Vector3(0, H, z), new Vector3(W + .3f, .28f, .34f)); }
-            foreach (float x in new[] { -W / 2f, W / 2f }) beams.Box(new Vector3(x, H, 0), new Vector3(.34f, .28f, D + .3f));
-            foreach (float x in new[] { -doorW / 2f - .1f, doorW / 2f + .1f }) beams.Box(new Vector3(x, 1.2f, D / 2f + .03f), new Vector3(.2f, 2.4f, .32f));
-            beams.Box(new Vector3(0, 2.38f, D / 2f + .03f), new Vector3(doorW + .4f, .2f, .32f));
-            beams.Box(new Vector3(-W / 4f - .9f, H / 2f, D / 2f + .02f), new Vector3(.14f, H * 1.02f, .3f), Quaternion.Euler(0, 0, 22f));
-            beams.Box(new Vector3(W / 4f + .9f, H / 2f, D / 2f + .02f), new Vector3(.14f, H * 1.02f, .3f), Quaternion.Euler(0, 0, -22f));
-            Shell("Timber Frame", beams, timber);
-            // glowing windows
-            var win = new MeshB(); var frames = new MeshB();
-            void Window(Vector3 c, bool alongX)
-            {
-                win.Box(c, alongX ? new Vector3(1.15f, .95f, .1f) : new Vector3(.1f, .95f, 1.15f));
-                Vector3 bar = alongX ? new Vector3(1.3f, .09f, .16f) : new Vector3(.16f, .09f, 1.3f), post = alongX ? new Vector3(.09f, 1.1f, .16f) : new Vector3(.16f, 1.1f, .09f);
-                frames.Box(c + Vector3.up * .5f, bar); frames.Box(c - Vector3.up * .5f, bar); frames.Box(c, post);
-                Vector3 off = alongX ? Vector3.right * .6f : Vector3.forward * .6f; frames.Box(c + off, post); frames.Box(c - off, post);
-            }
-            Window(new Vector3(-(doorW / 2f + seg / 2f), 1.75f, D / 2f + .1f), true); Window(new Vector3(doorW / 2f + seg / 2f, 1.75f, D / 2f + .1f), true);
-            Window(new Vector3(-W / 2f - .1f, 1.75f, .6f), false); Window(new Vector3(W / 2f + .1f, 1.75f, -.6f), false); Window(new Vector3(1.6f, 1.75f, -D / 2f - .1f), true);
-            NoShadow(Shell("Windows", win, windowGlow)); Shell("Window Frames", frames, timber);
-
-            // big swept roof (ridge along X): steep at the ridge, kicking out at the eaves
-            float ridge = H + 2.9f, over = 1.0f, eaveZ = D / 2f + 1.15f;
-            var roof = new MeshB();
-            float[] zs = { 0f, .35f, .68f, 1f }; float[] ys = { 0f, .46f, .80f, 1f };
-            foreach (float side in new[] { -1f, 1f })
-                for (int s = 0; s < 3; s++)
-                    for (int c = 0; c < 4; c++)
-                    {
-                        float x0 = Mathf.Lerp(-W / 2f - over, W / 2f + over, c / 4f), x1 = Mathf.Lerp(-W / 2f - over, W / 2f + over, (c + 1) / 4f);
-                        float z0 = zs[s] * eaveZ * side, z1 = zs[s + 1] * eaveZ * side, y0 = Mathf.Lerp(ridge, H - .25f, ys[s]), y1 = Mathf.Lerp(ridge, H - .25f, ys[s + 1]);
-                        float j = s == 2 ? Rr(-.12f, .12f) : 0f;
-                        roof.DoubleQuad(new Vector3(x0, y0, z0), new Vector3(x1, y0, z0), new Vector3(x1, y1 + j, z1), new Vector3(x0, y1 - j, z1));
-                    }
-            roof.Box(new Vector3(0, ridge + .05f, 0), new Vector3(W + over * 2f + .2f, .2f, .3f));
-            Shell("Roof", roof, slate);
-            // gables
-            var gable = new MeshB();
-            foreach (float x in new[] { -W / 2f, W / 2f })
-            {
-                gable.Double(new Vector3(x, H, -D / 2f), new Vector3(x, H, D / 2f), new Vector3(x, ridge - .15f, 0));
-                gable.Box(new Vector3(x, (H + ridge) / 2f, 0), new Vector3(.3f, ridge - H, .2f));
-            }
-            Shell("Gables", gable, plaster);
-            // chimney
-            var chim = new MeshB(); chim.Box(new Vector3(W / 2f - 1.5f, H + 2.0f, -1.2f), new Vector3(.8f, 3.0f, .8f)); chim.Box(new Vector3(W / 2f - 1.5f, H + 3.55f, -1.2f), new Vector3(1.0f, .22f, 1.0f));
-            Shell("Chimney", chim, stone);
-            // door (open), step, lanterns
-            var door = new MeshB(); door.Box(new Vector3(-doorW / 2f - .55f, 1.12f, D / 2f + .62f), new Vector3(.1f, 2.2f, 1.3f), Quaternion.Euler(0, -18f, 0)); Part(house, "Door", door, Mat("HouseDoor", new Color(.33f, .21f, .14f)));
-            var step = new MeshB(); step.Box(new Vector3(0, -.12f, D / 2f + .7f), new Vector3(2.4f, .3f, 1.0f)); Part(house, "Step", step, stone);
-            foreach (float x in new[] { -1.35f, 1.35f })
-            {
-                var lam = new MeshB(); lam.Blob(new Vector3(x, 2.15f, D / 2f + .42f), new Vector3(.13f, .18f, .13f), .1f, r); lam.Box(new Vector3(x, 2.3f, D / 2f + .25f), new Vector3(.05f, .05f, .4f));
-                NoShadow(Part(house, "Lantern", lam, windowGlow));
-                PointLight(house, new Vector3(x, 2.1f, D / 2f + .7f), new Color(1f, .72f, .4f), 7f, 1.5f);
-            }
-            PointLight(house, new Vector3(0, 2.4f, 0), new Color(1f, .78f, .5f), 9f, 1.4f);   // warm room light
-            // crooked fence around the yard (open at the front)
-            var fence = new MeshB();
-            for (int i = 0; i < 22; i++)
-            {
-                float a = Mathf.Lerp(.55f, Mathf.PI * 2f - .55f, i / 21f) + Mathf.PI / 2f;
-                Vector3 b0 = new Vector3(Mathf.Cos(a) * 8.6f, 0, Mathf.Sin(a) * 7.4f);
-                fence.Tube(new[] { b0 - Vector3.up * .2f, b0 + new Vector3(Rr(-.08f, .08f), Rr(.9f, 1.3f), Rr(-.08f, .08f)) }, new[] { .08f, .06f }, 5);
-                if (i < 21) { float a2 = Mathf.Lerp(.55f, Mathf.PI * 2f - .55f, (i + 1) / 21f) + Mathf.PI / 2f; Vector3 b1 = new Vector3(Mathf.Cos(a2) * 8.6f, 0, Mathf.Sin(a2) * 7.4f); fence.Tube(new[] { b0 + Vector3.up * .7f, b1 + Vector3.up * Rr(.6f, .8f) }, new[] { .045f, .045f }, 4, false); }
-            }
-            Part(house, "Fence", fence, timber);
-            // furniture: table, crates, barrel
-            var furn = new MeshB(); furn.Box(new Vector3(-2.4f, .78f, -1.9f), new Vector3(1.8f, .1f, 1.0f));
-            foreach (float x in new[] { -3.15f, -1.65f }) foreach (float z in new[] { -2.3f, -1.5f }) furn.Box(new Vector3(x, .4f, z), new Vector3(.1f, .76f, .1f));
-            furn.Box(new Vector3(3.3f, .5f, 2.3f), new Vector3(.8f, .8f, .8f), Quaternion.Euler(0, 14f, 0)); furn.Box(new Vector3(3.25f, 1.2f, 2.35f), new Vector3(.6f, .6f, .6f), Quaternion.Euler(0, -20f, 0));
-            furn.Tube(new[] { new Vector3(-3.4f, .1f, 2.3f), new Vector3(-3.4f, 1.1f, 2.3f) }, new[] { .42f, .42f }, 8);
-            Part(house, "Furniture", furn, Mat("Furniture", new Color(.38f, .25f, .15f)));
-
-            var hd = house.gameObject.AddComponent<HouseDungeon>(); hd.shell = shell.ToArray(); hd.interiorSize = new Vector3(W - .3f, 4f, D - .3f);
-
-            if (dungeonPad == null)
-            {
-                BuildChest(house, new Vector3(2.9f, .1f, -2.35f), 0f, 45, 40f);
-                BuildChest(house, new Vector3(-3.2f, .1f, .2f), 90f, 35, 30f);
-                // ambush: two mobs burst out of the back corner when the goblin walks in
-                var ambush = new GameObject("Ambush").transform; ambush.SetParent(house, false); ambush.localPosition = new Vector3(.8f, .12f, -2.2f);
-                var mouth = new GameObject("Mouth").transform; mouth.SetParent(ambush, false);
-                var lair = ambush.gameObject.AddComponent<MobLair>(); lair.mouth = mouth; lair.triggerRadius = 4.6f; lair.totalMobs = 2; lair.maxAlive = 2; lair.spawnInterval = 1.2f; lair.emergeDistance = 1.6f; lair.reward = 50; lair.lairName = "Засада";
-                lair.templates = Pick(templates, "RatRogue", "BoneSentinel");
-            }
-            else
-            {
-                BuildChest(house, new Vector3(-3.2f, .1f, .2f), 90f, 30, 30f);
-                var pad = BuildPad(house, new Vector3(2.1f, .1f, -1.2f), 0f, "спуститься в подземелье");
-                pad.target = dungeonPad; dungeonPad.target = pad;
-            }
         }
 
         // ───────────────────────── dungeon chamber ─────────────────────────
@@ -352,8 +224,8 @@ namespace Goblingame.TestScene.Editor
             var mouth = new GameObject("Mouth").transform; mouth.SetParent(gate, false); mouth.localPosition = new Vector3(0, .1f, .6f);
             var lair = gate.gameObject.AddComponent<MobLair>(); lair.mouth = mouth; lair.eyes = eyes.ToArray(); lair.triggerRadius = 15f; lair.totalMobs = 5; lair.maxAlive = 2; lair.spawnInterval = 3f; lair.reward = 150; lair.lairName = "Склеп";
             lair.templates = Pick(templates, "BoneSentinel", "RatRogue", "BoneSentinel", "MossGourmand");
-            BuildChest(room, new Vector3(6.5f, 0, -7f), -35f, 160, 90f, big: true);
-            BuildChest(room, new Vector3(-7f, 0, -6.5f), 40f, 50, 40f);
+            BuildChest(room, new Vector3(6.5f, 0, -7f), -35f, 160, 90f, true, "cleaver", "coin:40", "stew:2");
+            BuildChest(room, new Vector3(-7f, 0, -6.5f), 40f, 50, 40f, false, "mushroom:4", "bone:3");
             var pad = BuildPad(room, new Vector3(0, 0, 7.2f), 180f, "вернуться наверх");
             PointLight(room, new Vector3(0, 5f, 0), new Color(.45f, .5f, .95f), 22f, 1.3f);
             return pad;

@@ -136,6 +136,7 @@ namespace Goblingame.TestScene
         {
             ReleaseToken();state=State.Dead;timer=respawns?respawnDelay:6f;SetWalking(false,0f);stride=0f;
             var xp=player!=null?player.GetComponent<PlayerProgression>():null;if(xp!=null)xp.AddExperience(experienceReward);
+            Loot.DropFor(this);
         }
 
         private void Update()

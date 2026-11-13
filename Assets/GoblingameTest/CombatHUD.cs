@@ -50,6 +50,7 @@ namespace Goblingame.TestScene
             var legacy=transform.Find("Health Panel");if(legacy!=null)legacy.gameObject.SetActive(false);
             BuildReticle();
             BuildPrompt();
+            BuildInventory();
             UpdateControlsHint();
             RenderPortraits();
         }
@@ -86,6 +87,20 @@ namespace Goblingame.TestScene
                     if(pic.texture==null)pic.texture=PortraitStudio.Render(player.transform,256,256,true);
                 }
             }
+        }
+
+        // ───────────── inventory: belt, hearts, weapon arc, bag screen ─────────────
+        private InventoryHUD inventoryHud;
+        private void BuildInventory()
+        {
+            if(player==null)return;
+            var inv=player.GetComponent<GoblinInventory>();if(inv==null)inv=player.gameObject.AddComponent<GoblinInventory>();
+            inventoryHud=GetComponent<InventoryHUD>();if(inventoryHud==null)inventoryHud=gameObject.AddComponent<InventoryHUD>();
+            inventoryHud.player=player;inventoryHud.inventory=inv;
+            // hearts and level now live above the belt; the old corner panel goes away
+            var status=transform.Find("Goblin Status");if(status!=null)status.gameObject.SetActive(false);
+            var controls=transform.Find("Controls") as RectTransform;
+            if(controls!=null){controls.anchorMin=controls.anchorMax=controls.pivot=new Vector2(0,1);controls.anchoredPosition=new Vector2(24,-18);controls.sizeDelta=new Vector2(1250,90);var ct=controls.GetComponent<Text>();if(ct!=null){ct.alignment=TextAnchor.UpperLeft;ct.color=new Color(Cream.r,Cream.g,Cream.b,.75f);}}
         }
 
         // ───────────── lock-on reticle ─────────────
@@ -128,7 +143,7 @@ namespace Goblingame.TestScene
         private void BuildPrompt()
         {
             var rt=new GameObject("Interaction Prompt",typeof(RectTransform)).GetComponent<RectTransform>();rt.SetParent(transform,false);
-            rt.anchorMin=rt.anchorMax=new Vector2(.5f,0f);rt.pivot=new Vector2(.5f,0f);rt.anchoredPosition=new Vector2(0,170);rt.sizeDelta=new Vector2(900,56);
+            rt.anchorMin=rt.anchorMax=new Vector2(.5f,0f);rt.pivot=new Vector2(.5f,0f);rt.anchoredPosition=new Vector2(0,232);rt.sizeDelta=new Vector2(900,50);
             var back=rt.gameObject.AddComponent<Image>();back.color=new Color(.04f,.04f,.05f,.72f);back.raycastTarget=false;
             promptGroup=rt.gameObject.AddComponent<CanvasGroup>();promptGroup.alpha=0f;promptGroup.blocksRaycasts=false;
             var t=new GameObject("Text",typeof(RectTransform)).GetComponent<RectTransform>();t.SetParent(rt,false);t.anchorMin=Vector2.zero;t.anchorMax=Vector2.one;t.offsetMin=t.offsetMax=Vector2.zero;
@@ -194,7 +209,7 @@ namespace Goblingame.TestScene
         private void Update()
         {
             var kb=UnityEngine.InputSystem.Keyboard.current;
-            if(bestiary!=null&&kb!=null&&Application.isFocused&&kb.tabKey.wasPressedThisFrame)
+            if(bestiary!=null&&kb!=null&&Application.isFocused&&kb.tabKey.wasPressedThisFrame&&(inventoryHud==null||!inventoryHud.ScreenOpen))
             {
                 bestiary.SetActive(!bestiary.activeSelf);
                 Cursor.lockState=bestiary.activeSelf?CursorLockMode.None:CursorLockMode.Locked;Cursor.visible=bestiary.activeSelf;
@@ -275,10 +290,10 @@ namespace Goblingame.TestScene
         {
             var controls=transform.Find("Controls");if(controls==null)return;
             var t=controls.GetComponent<Text>();if(t==null)return;
-            t.text="WASD — движение   Shift — бег   Пробел — прыжок   Мышь — камера   Колесо — зум\n"+
+            t.text="WASD — движение   Shift — бег   Пробел — прыжок   Мышь — камера   Ctrl + колесо — зум   Колесо — сменить оружие   1–9 — пояс   I — сумка\n"+
                    "ЛКМ — серия ударов (с бега — рывок, в прыжке — удар с воздуха)   Q — удар головой, затем ЛКМ продолжает\n"+
                    "ПКМ — блок (вовремя = парирование)   F / СКМ — фокус   R — уклонение (на бегу — подкат) / встать   E — сундук, рунный круг   Tab — противники";
-            t.fontSize=16;
+            t.fontSize=15;
         }
     }
 

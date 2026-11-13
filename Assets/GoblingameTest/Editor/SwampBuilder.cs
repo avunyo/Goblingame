@@ -31,7 +31,7 @@ namespace Goblingame.TestScene.Editor
         public static void Build()
         {
             var scene = SceneManager.GetActiveScene();
-            rng = new System.Random(1207); mats.Clear(); pads.Clear(); firefly = null;
+            rng = new System.Random(1207); mats.Clear(); pads.Clear(); paths.Clear(); occupied.Clear(); firefly = null;
             foreach (var sub in new[] { "Meshes", "Materials", "Textures", "Shaders" })
                 if (!AssetDatabase.IsValidFolder(Folder + "/" + sub)) AssetDatabase.CreateFolder(Folder, sub);
             // fresh meshes every build
@@ -61,6 +61,12 @@ namespace Goblingame.TestScene.Editor
                 pads.Add(new Pad { c = l, r = radius, h = h }); return h + origin.y;
             }
             stumpA.y = PadFor(stumpA, 10f); stumpB.y = PadFor(stumpB, 10f); houseA.y = PadFor(houseA, 15f); houseB.y = PadFor(houseB, 17f);
+            var ruins = new[] { Site(68f, 78f), Site(252f, 84f), Site(158f, 92f) };
+            for (int i = 0; i < ruins.Length; i++) ruins[i].y = PadFor(ruins[i], 11f);
+            // trodden paths from the arena to every place (houses lead on to the ruins behind them)
+            int seed = 1;
+            foreach (var site in new[] { stumpA, stumpB, houseA, houseB, ruins[0], ruins[1], ruins[2] })
+                AddPath(centre + Flat(site - centre) * 17f, site - Flat(site - centre) * 6f, seed++);
 
             world = BuildTerrain(root, origin);
             if (ground != null) { var gr = ground.GetComponent<Renderer>(); if (gr != null) gr.enabled = false; }   // the terrain is the floor now (the arena collider stays)
@@ -76,6 +82,9 @@ namespace Goblingame.TestScene.Editor
             BuildHouse(places, houseA, centre, templates, null, "House by the Clearing");
             BuildHouse(places, houseB, centre, templates, dungeon, "House of the Rune Circle");
 
+            foreach (var pd in pads) occupied.Add((new Vector3(pd.c.x + origin.x, 0, pd.c.y + origin.z), pd.r * .66f));
+            occupied.Add((centre + new Vector3(9f, 0, -12f), 2.5f));
+            BuildLandmarks(root, centre, ruins);
             Scatter(root, world, origin, centre);
             BuildAtmosphere(root, centre);
 
@@ -86,6 +95,8 @@ namespace Goblingame.TestScene.Editor
             dynamicRoots.AddRange(root.GetComponentsInChildren<Campfire>(true).Select(c => c.transform));
             dynamicRoots.AddRange(root.GetComponentsInChildren<Chest>(true).Select(c => c.transform));
             dynamicRoots.AddRange(root.GetComponentsInChildren<TeleportPad>(true).Select(c => c.transform));
+            dynamicRoots.AddRange(root.GetComponentsInChildren<ItemPickup>(true).Select(c => c.transform));
+            dynamicRoots.AddRange(root.GetComponentsInChildren<ParticleSystem>(true).Select(c => c.transform));
             var templateRoot = root.Find("Mob Templates"); if (templateRoot != null) dynamicRoots.Add(templateRoot);
             foreach (Transform t in root.GetComponentsInChildren<Transform>(true))
             {
@@ -97,7 +108,8 @@ namespace Goblingame.TestScene.Editor
             AssetDatabase.SaveAssets();
             EditorSceneManager.SaveScene(scene);
             Debug.Log("[World] built: " + root.GetComponentsInChildren<Renderer>(true).Length + " renderers; " + root.GetComponentsInChildren<MobLair>().Length + " lairs, " +
-                      root.GetComponentsInChildren<HouseDungeon>().Length + " houses, " + root.GetComponentsInChildren<Campfire>().Length + " campfires, " + root.GetComponentsInChildren<Chest>().Length + " chests");
+                      root.GetComponentsInChildren<HouseDungeon>().Length + " houses, " + root.GetComponentsInChildren<Campfire>().Length + " campfires, " + root.GetComponentsInChildren<Chest>().Length + " chests, " +
+                      root.GetComponentsInChildren<ItemPickup>().Length + " pickups, " + paths.Count + " paths");
         }
 
         private static Vector3 Flat(Vector3 v) { v.y = 0; return v.sqrMagnitude > 1e-6f ? v.normalized : Vector3.forward; }
@@ -163,7 +175,8 @@ namespace Goblingame.TestScene.Editor
                 float moss = Noise(x, z, .055f, 2, 5.5f);
                 float soil = Mathf.Clamp01(Mathf.InverseLerp(18f, 34f, steep) + Mathf.InverseLerp(.66f, .78f, Noise(x, z, .05f, 2, 33f)) * .7f);
                 float leaves = Mathf.InverseLerp(.60f, .72f, Noise(x, z, .035f, 3, 91f)) * (1f - Mathf.Clamp01(wet * 2f)) * Mathf.InverseLerp(14f, 26f, Vector2.Distance(new Vector2(x, z), arena));
-                float[] w = { 1f, moss * 1.3f, soil, wet * 3f, leaves * 2.6f };
+                float trail = Mathf.InverseLerp(2.3f, 1.1f, PathDistance(origin.x + x, origin.z + z)) * (1f - Mathf.Clamp01(wet * 3f));
+                float[] w = { 1f - trail, moss * 1.3f * (1f - trail), soil + trail * 5f, wet * 3f, leaves * 2.6f * (1f - trail * .7f) };
                 float sum = w.Sum();
                 for (int l = 0; l < w.Length; l++) alpha[zi, xi, l] = w[l] / sum;
             }
@@ -529,9 +542,7 @@ namespace Goblingame.TestScene.Editor
                 reed = Mat("Reed", new Color(.16f, .40f, .40f)), cattail = Mat("Cattail", new Color(.30f, .18f, .16f)), padM = Mat("LilyPad", new Color(.12f, .40f, .36f), .35f),
                 cap = Mat("GlowCap", new Color(.3f, .95f, .9f), emission: new Color(.25f, 1.3f, 1.2f)), stemM = Mat("ShroomStem", new Color(.8f, .85f, .8f));
 
-            var placed = new List<(Vector3 p, float r)>();
-            foreach (var pd in pads) placed.Add((new Vector3(pd.c.x + origin.x, 0, pd.c.y + origin.z), pd.r * .66f));
-            placed.Add((centre + new Vector3(9f, 0, -12f), 2.5f));
+            var placed = occupied;
             Vector3 Pick(float minR, float maxR)
             {
                 float a = R(0, Mathf.PI * 2f), d = Mathf.Sqrt(R(minR * minR, maxR * maxR));
@@ -539,27 +550,38 @@ namespace Goblingame.TestScene.Editor
                 p.x = Mathf.Clamp(p.x, origin.x + 3f, origin.x + Size - 3f); p.z = Mathf.Clamp(p.z, origin.z + 3f, origin.z + Size - 3f);
                 p.y = terrain.SampleHeight(p) + terrain.transform.position.y; return p;
             }
-            bool Free(Vector3 p, float r) => placed.All(q => new Vector2(q.p.x - p.x, q.p.z - p.z).magnitude > q.r + r);
+            bool Free(Vector3 p, float r) => placed.All(q => new Vector2(q.p.x - p.x, q.p.z - p.z).magnitude > q.r + r) && PathDistance(p.x, p.z) > r + 1.2f;
+            float Grove(Vector3 p) => Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(.36f, .6f, Noise(p.x - origin.x, p.z - origin.z, .022f, 2, 44f)));
             float water = origin.y + WaterLevel; int n;
 
             // tall pines: the forest
-            n = 0; for (int i = 0; i < 3000 && n < 270; i++)
+            n = 0; for (int i = 0; i < 12000 && n < 560; i++)
             {
-                var p = Pick(25f, Size * .49f); if (p.y < water + .3f || !Free(p, 2.6f)) continue;
+                var p = Pick(25f, Size * .49f); if (p.y < water + .3f || rng.NextDouble() > Mathf.Lerp(.18f, 1f, Grove(p)) || !Free(p, 2.4f)) continue;
                 var (tr, nd) = pines[rng.Next(pines.Length)];
                 var t = new GameObject("Pine").transform; t.SetParent(props, false); t.position = p - Vector3.up * .25f; t.rotation = Quaternion.Euler(R(-2, 2), R(0, 360), R(-2, 2)); t.localScale = Vector3.one * R(.85f, 1.25f);
                 Part(t, "Trunk", tr, trunk); Part(t, "Needles", nd, rng.NextDouble() < .6 ? needleA : needleB);
                 var col = t.gameObject.AddComponent<CapsuleCollider>(); col.radius = .5f; col.height = 8f; col.center = Vector3.up * 4f;
-                placed.Add((p, 2.6f)); n++;
+                placed.Add((p, 2.4f)); n++;
             }
-            n = 0; for (int i = 0; i < 500 && n < 24; i++)
+            // young pines fill the gaps at the forest edge
+            n = 0; for (int i = 0; i < 6000 && n < 240; i++)
+            {
+                var p = Pick(20f, Size * .48f); if (p.y < water + .3f || rng.NextDouble() > Mathf.Lerp(.35f, 1f, Grove(p)) || !Free(p, 1.3f)) continue;
+                var (tr, nd) = pines[rng.Next(pines.Length)];
+                var t = new GameObject("Young Pine").transform; t.SetParent(props, false); t.position = p - Vector3.up * .15f; t.rotation = Quaternion.Euler(R(-3, 3), R(0, 360), R(-3, 3)); t.localScale = Vector3.one * R(.32f, .55f);
+                Part(t, "Trunk", tr, trunk); Part(t, "Needles", nd, rng.NextDouble() < .5 ? needleA : needleB);
+                var col = t.gameObject.AddComponent<CapsuleCollider>(); col.radius = .6f; col.height = 8f; col.center = Vector3.up * 4f;
+                placed.Add((p, 1.3f)); n++;
+            }
+            n = 0; for (int i = 0; i < 900 && n < 40; i++)
             {
                 var p = Pick(24f, Size * .47f); if (p.y > water + 1.6f || !Free(p, 1.5f)) continue;
                 var t = Part(props, "Dead Tree", dead[rng.Next(dead.Length)], deadBark).transform; t.position = p - Vector3.up * .15f; t.rotation = Quaternion.Euler(R(-6, 6), R(0, 360), R(-6, 6)); t.localScale = Vector3.one * R(.9f, 1.4f);
                 var col = t.gameObject.AddComponent<CapsuleCollider>(); col.radius = .3f; col.height = 4f; col.center = Vector3.up * 2f;
                 placed.Add((p, 1.5f)); n++;
             }
-            n = 0; for (int i = 0; i < 900 && n < 80; i++)
+            n = 0; for (int i = 0; i < 1600 && n < 120; i++)
             {
                 var p = Pick(19f, Size * .48f); if (!Free(p, 1.3f)) continue;
                 var (mesh, rr) = rocks[rng.Next(rocks.Length)]; float s = R(.6f, 2.4f);
@@ -574,7 +596,7 @@ namespace Goblingame.TestScene.Editor
                 var t = Part(props, "Grass", tufts[rng.Next(tufts.Length)], rng.NextDouble() < .68 ? grassA : grassB); t.transform.position = p - Vector3.up * .03f; t.transform.rotation = Quaternion.Euler(0, R(0, 360), 0); t.transform.localScale = Vector3.one * R(.8f, 1.7f);
                 NoShadow(t); n++;
             }
-            n = 0; for (int i = 0; i < 3000 && n < 330; i++)
+            n = 0; for (int i = 0; i < 6000 && n < 560; i++)
             {
                 var p = Pick(20f, Size * .46f); if (p.y < water + .2f) continue;
                 if (Noise(p.x - origin.x, p.z - origin.z, .035f, 3, 91f) < .52f && rng.NextDouble() < .8) continue;   // cluster on the leaf-litter patches
@@ -582,13 +604,13 @@ namespace Goblingame.TestScene.Editor
                 var t = new GameObject("Golden Bush").transform; t.SetParent(props, false); t.position = p; t.rotation = Quaternion.Euler(0, R(0, 360), 0); t.localScale = Vector3.one * R(.8f, 1.6f);
                 NoShadow(Part(t, "Stems", st, stems)); Part(t, "Leaves", lv, gold); n++;
             }
-            n = 0; for (int i = 0; i < 2000 && n < 220; i++)
+            n = 0; for (int i = 0; i < 4000 && n < 430; i++)
             {
                 var p = Pick(18f, Size * .46f); if (p.y < water + .15f) continue;
                 var t = Part(props, "Fern", ferns[rng.Next(ferns.Length)], rng.NextDouble() < .7 ? fernRed : fernPink); t.transform.position = p; t.transform.rotation = Quaternion.Euler(0, R(0, 360), 0); t.transform.localScale = Vector3.one * R(.9f, 1.8f);
                 NoShadow(t); n++;
             }
-            n = 0; for (int i = 0; i < 1500 && n < 70; i++)
+            n = 0; for (int i = 0; i < 2500 && n < 120; i++)
             {
                 var p = Pick(17f, Size * .46f); if (p.y < water + .1f) continue;
                 var t = new GameObject("Glow Mushrooms").transform; t.SetParent(props, false); t.position = p;
@@ -613,6 +635,7 @@ namespace Goblingame.TestScene.Editor
                 var p = Pick(24f, Size * .47f); if (p.y > water - .25f) continue;
                 var t = Part(props, "Lily Pad", lily, padM).transform; t.position = new Vector3(p.x, water + .02f, p.z); t.rotation = Quaternion.Euler(0, R(0, 360), 0); t.localScale = Vector3.one * R(.7f, 1.4f); n++;
             }
+            BuildGroundCover(parent, terrain, origin, centre, tufts, new[] { grassA, grassB });
         }
 
         // ───────────────────────── atmosphere ─────────────────────────

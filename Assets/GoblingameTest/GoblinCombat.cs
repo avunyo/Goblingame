@@ -238,7 +238,7 @@ namespace Goblingame.TestScene
 
             if (attacking)
             {
-                clipTime += dt * (hasAttackSpeed ? move.speed : 1f);
+                clipTime += dt * (hasAttackSpeed ? MoveSpeedFor(move) : 1f);
                 if (punch) queuedPunch = true;
                 if (headbutt && Time.time >= nextHeadbutt) queuedHeadbutt = true;
                 if (clipTime < move.impact) FaceAttackTarget();
@@ -354,7 +354,7 @@ namespace Goblingame.TestScene
         private void BeginMove()
         {
             attacking = true; hitDone = false; queuedPunch = false; queuedHeadbutt = false; blocking = false;
-            if (hasAttackSpeed) animator.SetFloat(AttackSpeedParam, move.speed);
+            if (hasAttackSpeed) animator.SetFloat(AttackSpeedParam, MoveSpeedFor(move));
             gestureClock = -1f; lastCombatTime = Time.time;
             attackTarget = PickTarget();
             steerDir = attackTarget == null ? InputDirection() : Vector3.zero;   // no target: punch where the player steers
@@ -368,6 +368,18 @@ namespace Goblingame.TestScene
             }
             else if (dashAttack && movement != null) movement.Push(transform.forward * 8f);
         }
+
+        // the weapon in the hand changes how hard and how fast the punches land (the headbutt stays a headbutt)
+        private GoblinInventory inventory; private bool inventoryLooked;
+        public ItemDef EquippedWeapon
+        {
+            get
+            {
+                if (!inventoryLooked || inventory == null) { inventory = GetComponent<GoblinInventory>(); inventoryLooked = true; }
+                return inventory != null ? inventory.Weapon : Items.Fists;
+            }
+        }
+        private float MoveSpeedFor(Move m) => m.state == "Headbutt" ? m.speed : m.speed * EquippedWeapon.speed;
 
         private void EndAttack(float blend)
         {
@@ -409,6 +421,9 @@ namespace Goblingame.TestScene
         {
             float damage = m.state == "Headbutt" ? headbuttDamage : m.heavy ? finisherDamage : punchDamage;
             if (dashAttack) { damage *= 1.35f; dashAttack = false; }
+            var weapon = EquippedWeapon;
+            if (m.state != "Headbutt") damage *= weapon.damage;
+            float reach = attackReach + (m.state != "Headbutt" ? weapon.reach : 0f);
             bool any = false;
             DamageableTarget single = null; float singleDist = float.MaxValue;
             foreach (var t in DamageableTarget.All)
@@ -416,7 +431,7 @@ namespace Goblingame.TestScene
                 if (t == null || t.IsDead || t.transform.IsChildOf(transform)) continue;
                 Vector3 d = Flat(t.transform.position - transform.position);
                 float dist = d.magnitude - t.Radius;
-                if (dist > attackReach || Vector3.Angle(transform.forward, d) > m.arc) continue;
+                if (dist > reach || Vector3.Angle(transform.forward, d) > m.arc) continue;
                 if (m.heavy) { Apply(t, m, damage); any = true; }
                 else
                 {

@@ -68,6 +68,7 @@ namespace Goblingame.TestScene
             foreach (var r in eyes)
             {
                 if (r == null) continue;
+                if (block == null) block = new MaterialPropertyBlock();   // survives a hot reload
                 r.GetPropertyBlock(block); block.SetColor("_EmissionColor", new Color(1f, .35f, .1f) * (glow * 3f)); block.SetColor("_Color", Color.Lerp(new Color(.1f, .05f, .03f), new Color(1f, .5f, .15f), glow));
                 r.SetPropertyBlock(block);
             }

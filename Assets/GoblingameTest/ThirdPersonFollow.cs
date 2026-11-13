@@ -108,7 +108,10 @@ namespace Goblingame.TestScene
             Vector2 look = Vector2.zero;
             if (mouse != null && Application.isFocused && Cursor.lockState == CursorLockMode.Locked)
                 look = mouse.delta.ReadValue() * mouseSensitivity;
-            if (mouse != null && Application.isFocused)
+            // plain wheel flips weapons (GoblinInventory); Ctrl + wheel zooms
+            var kb = Keyboard.current;
+            bool zoomKey = kb != null && (kb.leftCtrlKey.isPressed || kb.rightCtrlKey.isPressed);
+            if (mouse != null && Application.isFocused && zoomKey && Cursor.lockState == CursorLockMode.Locked)
             {
                 float scroll = mouse.scroll.ReadValue().y;
                 if (Mathf.Abs(scroll) > 0.01f) targetDistance = Mathf.Clamp(targetDistance - Mathf.Sign(scroll) * zoomStep, minDistance, maxDistance);

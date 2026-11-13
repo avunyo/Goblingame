@@ -8,6 +8,7 @@ namespace Goblingame.TestScene
     public sealed class Chest : MonoBehaviour
     {
         public Transform lid; public int experience = 40; public float heal = 35f; public Light glow;
+        [Tooltip("Items that pop out, e.g. \"club\", \"coin:12\", \"mushroom:3\".")] public string[] loot;
         private bool opened; private float openT;
         public bool IsOpen => opened;
 
@@ -33,6 +34,7 @@ namespace Goblingame.TestScene
             var player = Interaction.Player; if (player == null) return;
             var xp = player.GetComponent<PlayerProgression>(); if (xp != null) xp.AddExperience(experience);
             CombatEvents.Raise(transform.position + Vector3.up * 1.6f, experience, CombatEvents.Kind.Reward, false);
+            Loot.Throw(loot, transform.position + Vector3.up * .9f);
             float healed = player.Heal(heal);
             if (healed > 0.5f) CombatEvents.Raise(player.transform.position + Vector3.up * 1.9f, healed, CombatEvents.Kind.Heal, true);
         }

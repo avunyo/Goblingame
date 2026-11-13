@@ -68,6 +68,8 @@ namespace Goblingame.TestScene.Editor
         {
             if (EditorApplication.isPlaying) return;
             File.WriteAllText(Path.Combine(Root, "Temp/GoblinPlaytest.run"), "run");
+            // keep playing while another window has focus (otherwise the test freezes in the background)
+            if (!PlayerSettings.runInBackground) PlayerSettings.runInBackground = true;
             Debug.Log("[Playtest] starting play mode");
             EditorApplication.EnterPlaymode();
         }
